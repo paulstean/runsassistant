@@ -1,0 +1,8 @@
+# local deploy overrides / scratch
+deploy.local.ps1
+*.bak
+
+# build outputs (plan.md P0)
+build/
+out/
+.cmake/
