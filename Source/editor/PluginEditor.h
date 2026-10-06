@@ -3,42 +3,93 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../processor/PluginProcessor.h"
+#include "Theme.h"
 
-// P0 spike overlay (plan.md P0 item 5): live playhead readout, replacing the
-// layout with the real S9 panel in P3.
-class SpikeOverlay : public juce::Component, private juce::Timer
-{
-public:
-    explicit SpikeOverlay (RunsProcessor& p);
-    ~SpikeOverlay() override = default;
+#include <memory>
 
-    void paint (juce::Graphics&) override;
-    void resized() override;
+class SettingsPanel;
+class DebugOverlayPanel;
 
-private:
-    void timerCallback() override;
-    void appendSpikeLog();
-
-    RunsProcessor& processor;
-    juce::Label statusLabels[6];
-    juce::String spikeLogPath;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpikeOverlay)
-};
-
-class RunsEditor : public juce::AudioProcessorEditor
+// S9 panel (plan.md P3). Layout shell + dark theme + data-bound controls:
+//   title row:   title + engine Off/Up/Down toggles (engine param)
+//   scale row:   tonic combo, mode combo (17 entries), 12 pitch-class ticks
+//   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
+//   walk row:    Fold / Zig-zag radios (walk param)
+//   bottom row:  Settings... dialog + Debug overlay toggle (S9)
+// Engine / scale / walk / slider state lives in the APVTS, so host automation
+// and bound-CC mirrors arrive through the attachments (S4/S11); the processor
+// observes an engine value change at block time and cuts the active run (S5.6).
+class RunsEditor : public juce::AudioProcessorEditor,
+                   private juce::Slider::Listener,
+                   private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     explicit RunsEditor (RunsProcessor& p);
-    ~RunsEditor() override = default;
+    ~RunsEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    // Slider + readout bundle (S9 rows); top-level for the styling helper.
+    struct ParamRow
+    {
+        juce::Label name;
+        juce::Slider slider;
+        juce::Label readout;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
+            attachment;
+    };
+
 private:
+    // juce::Slider::Listener: refresh the value readouts
+    void sliderValueChanged (juce::Slider*) override;
+    // APVTS listener: tonic/mode changes (GUI combos, CC/automation, load)
+    // re-tick the pitch-class grid (D12)
+    void parameterChanged (const juce::String& paramID,
+                           float newValue) override;
+
+    void refreshScaleTicks (bool keepTicks);
+    void pitchTickChanged (int pitchClass);
+    void updateReadouts();
+    void ensureDialog();
+    void toggleOverlay (bool on);
+
     RunsProcessor& processor;
+
+    runui::RunsLookAndFeel lookAndFeel;
+    juce::TooltipWindow tooltips { this, 400 };
+
+    // Title row
     juce::Label title;
-    SpikeOverlay overlay;
+    juce::ToggleButton engineButtons[3];
+    std::unique_ptr<juce::ParameterAttachment> engineAttachment;
+
+    // Scale rows
+    juce::Label tonicLabel, modeLabel;
+    juce::ComboBox tonicCombo, modeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
+        tonicAttachment, modeAttachment;
+    juce::ToggleButton pitchBoxes[12];
+    bool refreshGuard = false;
+
+    // Parameter sliders + readouts
+    ParamRow beats, density, curve, accent, arc;
+
+    // Walk radios
+    juce::Label walkLabel;
+    juce::ToggleButton foldButton { "Fold" };
+    juce::ToggleButton zigzagButton { "Zig-zag" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        walkAttachment;
+
+    // Bottom row
+    juce::TextButton settingsButton { "Settings..." };
+    juce::ToggleButton debugToggle { "Debug overlay" };
+
+    // owned in the .cpp (defined types live there)
+    std::unique_ptr<SettingsPanel> settingsPanel;
+    std::unique_ptr<juce::DialogWindow> settingsDialog;
+    std::unique_ptr<DebugOverlayPanel> overlayPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RunsEditor)
 };
