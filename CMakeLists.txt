@@ -43,6 +43,22 @@ set(RUNS_SOURCES
     Source/editor/PluginEditor.h
     Source/editor/PluginEditor.cpp)
 
+# JUCE-free core engine (plain C++17; see plan.md P1). Enforced JUCE-free by
+# the include-check in the headless-tests block below.
+set(RUNS_CORE_SOURCES
+    Source/core/ScaleModel.h
+    Source/core/ScaleModel.cpp
+    Source/core/PairTracker.h
+    Source/core/PairTracker.cpp
+    Source/core/Walk.h
+    Source/core/Walk.cpp
+    Source/core/CurveMap.h
+    Source/core/CurveMap.cpp
+    Source/core/VelocityModel.h
+    Source/core/VelocityModel.cpp
+    Source/core/RunEngine.h
+    Source/core/RunEngine.cpp)
+
 juce_add_plugin(RunsAssistant
     COMPANY_NAME "Runs Community"
     BUNDLE_ID dev.runsassistant.native
@@ -62,6 +78,7 @@ juce_add_plugin(RunsAssistant
     AU_EXPORT_PREFIX RunsAssistantAU)
 
 target_sources(RunsAssistant PRIVATE ${RUNS_SOURCES})
+target_sources(RunsAssistant PRIVATE ${RUNS_CORE_SOURCES})
 target_include_directories(RunsAssistant PRIVATE Source)
 target_link_libraries(RunsAssistant PRIVATE juce::juce_audio_utils)
 target_compile_definitions(RunsAssistant PUBLIC
@@ -96,6 +113,7 @@ if (APPLE)
         IS_MIDI_EFFECT TRUE)
 
     target_sources(RunsAssistantMFX PRIVATE ${RUNS_SOURCES})
+    target_sources(RunsAssistantMFX PRIVATE ${RUNS_CORE_SOURCES})
     target_include_directories(RunsAssistantMFX PRIVATE Source)
     target_link_libraries(RunsAssistantMFX PRIVATE juce::juce_audio_utils)
     target_compile_definitions(RunsAssistantMFX PUBLIC
@@ -127,4 +145,30 @@ if (RUNS_BUILD_TESTS)
 
     include(CTest)
     add_test(NAME P0StateRoundTrip COMMAND P0StateRoundTrip)
+
+    # --------------------------------------------------- CoreTests (P1, JUCE-free)
+    add_executable(CoreTests
+        tests/TestMain.cpp
+        tests/CoreTests.cpp
+        tests/EngineTests.cpp
+        tests/SweepTests.cpp
+        ${RUNS_CORE_SOURCES})
+    target_include_directories(CoreTests PRIVATE tests Source)
+    add_test(NAME CoreTests COMMAND CoreTests)
+
+    # Source/core must stay JUCE-free (plain C++17, testable standalone;
+    # failed configure otherwise, same house rule as Eloquent).
+    file(GLOB_RECURSE RUNS_CORE_FILES CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/Source/core/*")
+    set(RUNS_CORE_CHECKED OFF)
+    foreach (corefile IN LISTS RUNS_CORE_FILES)
+        file(READ "${corefile}" corecontent)
+        if (corecontent MATCHES "#[ \t]*include[ \t]*[<\"]juce")
+            message(FATAL_ERROR "Source/core must not include JUCE: ${corefile}")
+        endif ()
+        set(RUNS_CORE_CHECKED ON)
+    endforeach ()
+    if (NOT RUNS_CORE_CHECKED)
+        message(FATAL_ERROR "Source/core has no files; include-check skipped")
+    endif ()
 endif ()
