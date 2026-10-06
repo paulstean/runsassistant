@@ -40,6 +40,8 @@ endif ()
 set(RUNS_SOURCES
     Source/processor/PluginProcessor.h
     Source/processor/PluginProcessor.cpp
+    Source/processor/PlayheadAdapter.h
+    Source/processor/PlayheadAdapter.cpp
     Source/editor/PluginEditor.h
     Source/editor/PluginEditor.cpp)
 
@@ -134,7 +136,8 @@ endif ()
 # Console tools only: no audio hardware, no GUI, no DAW. Runs under CTest.
 if (RUNS_BUILD_TESTS)
     add_executable(P0StateRoundTrip tests/P0StateRoundTrip.cpp
-        ${RUNS_SOURCES})
+        ${RUNS_SOURCES}
+        ${RUNS_CORE_SOURCES})
     target_include_directories(P0StateRoundTrip PRIVATE Source)
     target_link_libraries(P0StateRoundTrip PRIVATE juce::juce_audio_utils)
     target_compile_definitions(P0StateRoundTrip PUBLIC
@@ -145,6 +148,22 @@ if (RUNS_BUILD_TESTS)
 
     include(CTest)
     add_test(NAME P0StateRoundTrip COMMAND P0StateRoundTrip)
+
+    # ------------------------------------------------ ProcessorTests (P2)
+    # Full-processBlock conformance: pair capture matrix, epsilon alignment,
+    # cut matrix, CC mapping/absorption, binary chunk round-trip.
+    add_executable(ProcessorTests
+        tests/ProcessorTests.cpp
+        ${RUNS_SOURCES}
+        ${RUNS_CORE_SOURCES})
+    target_include_directories(ProcessorTests PRIVATE Source tests)
+    target_link_libraries(ProcessorTests PRIVATE juce::juce_audio_utils)
+    target_compile_definitions(ProcessorTests PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0)
+    add_test(NAME ProcessorTests COMMAND ProcessorTests)
 
     # --------------------------------------------------- CoreTests (P1, JUCE-free)
     add_executable(CoreTests

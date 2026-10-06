@@ -39,6 +39,9 @@ struct PairOutcome
         Pair            // pair formed: pitchLo/Hi + velocities + pendingBeat
     };
     Kind kind = Nothing;
+    // ADDITIVE (P2): tracker channel index (0..15) the outcome belongs to;
+    // the processor needs it to route flushAll() late publishes.
+    int channel = 0;
     PairNoteEvent a;
     PairNoteEvent b;
     bool hasPair = false;
@@ -52,6 +55,19 @@ class PairTracker
 public:
     // True when a pending note had to be published late (S5.2 jab case).
     int latePublishes() const { return latePublishes_; }
+
+    // ADDITIVE (P2): any channel with a buffered pending note (debug overlay,
+    // S6.1 step 6); pitch is written when true is returned.
+    bool pendingOnAny (int* pitch) const
+    {
+        for (int c = 0; c < kNumChannels; ++c)
+            if (channels_[c].hasPending)
+            {
+                if (pitch != nullptr) *pitch = channels_[c].pendPitch;
+                return true;
+            }
+        return false;
+    }
 
     // Reset everything (engine state composition; no events produced).
     void resetAll();

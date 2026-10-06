@@ -62,10 +62,21 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
 
     // S5.1: aligned start beat = next integer beat at or after the trigger; a
     // trigger landing within epsilon after a beat line counts on that line.
-    const long long base = (long long) std::floor (t.triggerBeat);
-    const double frac = t.triggerBeat - (double) base;
-    startBeat_ = (frac <= p.epsilonBeats + kBeatEps) ? (double) base
-                                                     : (double) (base + 1);
+    // ADDITIVE (P2): virtual-clock mode skips alignment (trigger is beat 0).
+    // S5.1: aligned start beat = next integer beat at or after the trigger; a
+    // trigger landing within epsilon after a beat line counts on that line.
+    // ADDITIVE (P2): virtual-clock mode skips alignment (trigger is beat 0).
+    if (p.alignToGrid)
+    {
+        const long long base = (long long) std::floor (t.triggerBeat);
+        const double frac = t.triggerBeat - (double) base;
+        startBeat_ = (frac <= p.epsilonBeats + kBeatEps) ? (double) base
+                                                         : (double) (base + 1);
+    }
+    else
+    {
+        startBeat_ = t.triggerBeat;
+    }
     beats_ = (double) p.beats;
 
     // S5.3: onsets in beat space, endpoints inclusive.

@@ -57,10 +57,14 @@ void testPassthrough()
     RunsProcessor p;
     p.prepareToPlay (48000.0, 512);
 
+    // Engine stays Off (CC20 is not the engine CC and not bound), so P2 must
+    // still give byte-identical passthrough (S3.3). The old P0 packet used
+    // CC87 itself, which is now the engine switch (S3.1) and would change the
+    // engine state mid-block.
     juce::MidiBuffer in;
     in.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
     in.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 90), 17);
-    in.addEvent (juce::MidiMessage::controllerEvent (2, 87, 1), 33);
+    in.addEvent (juce::MidiMessage::controllerEvent (2, 20, 40), 33);
     in.addEvent (juce::MidiMessage::noteOff (1, 60), 100);
     in.addEvent (juce::MidiMessage::pitchWheel (1, 2000), 200);
 

@@ -25,6 +25,7 @@ void PairTracker::flushAll (PairOutcome* outs, int cap, int* publishedCount)
         {
             PairOutcome o;
             o.kind = PairOutcome::LateOnOff;
+            o.channel = c; // tracker channel index (P2 routing)
             o.a = { ch.pendPitch, ch.pendVel, true };
             o.b = { ch.pendPitch, ch.pendVel, false };
             outs[(*publishedCount)++] = o;
@@ -51,6 +52,7 @@ PairOutcome PairTracker::noteOn (int channel, int pitch, int velocity, double be
             o.kind = PairOutcome::PublishAndPass;
             o.a = { ch.pendPitch, ch.pendVel, true };
             o.b = { pitch, velocity, true };
+            o.pendingBeat = ch.pendBeat; // latch for late offset restore (P2)
             ch.addPublished (ch.pendPitch);
             ch.addPublished (pitch);
             ch.hasPending = false;

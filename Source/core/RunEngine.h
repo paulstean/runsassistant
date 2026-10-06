@@ -57,6 +57,9 @@ struct RunParams
     double gateFraction = 0.6; // S5.8 settings value (clamped 0..1)
     double epsilonBeats = 0.0; // S5.1 alignment epsilon (beats)
     int barNumerator = 4;      // timeSig numerator for bar lines, 0 = none (S5.7)
+    // ADDITIVE (P2): S5.1 virtual-clock mode skips alignment (the trigger
+    // defines beat 0); ppq mode aligns forward to the next integer beat.
+    bool alignToGrid = true;
 };
 
 struct PairTrigger
