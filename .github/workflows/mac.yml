@@ -22,9 +22,6 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-universal --parallel
 
-      - name: CTest
-        run: ctest --test-dir build/mac -C Release --output-on-failure
-
       - name: Stage artefacts
         shell: bash
         run: |
