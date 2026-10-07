@@ -176,9 +176,10 @@ RunsProcessor::createParameterLayout()
     return layout;
 }
 
-void RunsProcessor::prepareToPlay (double newSampleRate, int)
+void RunsProcessor::prepareToPlay (double newSampleRate, int newSamplesPerBlock)
 {
     sampleRate_ = newSampleRate > 0.0 ? newSampleRate : 48000.0;
+    lastBlockSamples_ = newSamplesPerBlock;
     // Preallocated scratch reset; nothing is allocated here (S6.2). All
     // buffers are fixed-capacity members sized at construction.
     pairs.resetAll();
@@ -457,6 +458,19 @@ void RunsProcessor::emitLatePublish (int channel, int pitch, int velocity,
     pushNoteMsg (false, channel, pitch, velocity, sampleOffset);
 }
 
+void RunsProcessor::requestEngineState (int index)
+{
+    // S3.1 GUI three-state switch: queued directly; the parameter is
+    // mirrored back afterwards (doEngineChange -> mirror FIFO) so host
+    // automation and the UI stay consistent. The audio thread dedups.
+    if (index < 0 || index > 2)
+        return;
+    diagEngineListenerHits.store (
+        diagEngineListenerHits.load (std::memory_order_relaxed) + 1,
+        std::memory_order_relaxed); // count direct GUI pushes too
+    engineQueue.push (index);
+}
+
 void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatNow)
 {
     // S5.2/S5.6: engine state change flushes pending notes (late publish)
@@ -474,6 +488,11 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
     engineState_ = newState;
     diagEngineSwitches.store (diagEngineSwitches.load (std::memory_order_relaxed)
                               + 1, std::memory_order_relaxed);
+    // Host echo guard: param-driven detections in the grace window right
+    // after a switch are ignored (see echoGraceBlocks). Scaled to sampleRate.
+    echoGraceBlocks.store (juce::jlimit (4, 480,
+        (int) (0.5 * sampleRate_ / juce::jmax (1.0, (double) lastBlockSamples_))),
+        std::memory_order_relaxed);
     // GUI mirror of the engine state via the same dirty path as CC edits
     // (S3.1/S11); the audio thread only enqueues.
     mirrorFifo.push ({ kEngineIndex, (float) engineState_, true });
@@ -654,11 +673,17 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
     if (blk.beatSpaceChanged && engine.isActive()) // S5.1 mode switch (see
         engine.cut (blk.b0, runSink);              // deviations list)
 
-    // Engine switch via GUI / host automation (S5.6 cut condition): only a
-    // NEW raw value triggers it; a stale CC mirror must not flip the state.
+    // Engine switch via host automation (S5.6 cut condition): only a NEW raw
+    // value triggers it, and only outside the echo grace window; REAPER
+    // pushes cached param values back after UI focus changes and would
+    // otherwise ping-pong the engine. GUI clicks / requestEngineState bypass
+    // the param (queue below) and always win.
     const int guiEngine = (int) std::lround (
         juce::jlimit (0.0f, 2.0f, live[0]));
-    if (engineParamChanged && guiEngine != engineState_)
+    int grace = echoGraceBlocks.load (std::memory_order_relaxed);
+    echoGraceBlocks.store (grace > 0 ? grace - 1 : 0,
+                           std::memory_order_relaxed);
+    if (grace == 0 && engineParamChanged && guiEngine != engineState_)
         doEngineChange (guiEngine, 0, blk.b0);
 
     // Queue path first drain (S6.1 step 3 precedence): the listener enqueued

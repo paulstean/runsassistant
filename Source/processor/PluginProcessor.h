@@ -168,6 +168,12 @@ public:
     // snapshot. The editor timer will use the same FIFO (P3).
     runsp::UiMessage latestUiState();
 
+    // GUI / programmatic engine switch (S3.1): message thread writes the
+    // requested state straight into the switch queue; the engine param is
+    // NOT involved (hosts may echo param values back asynchronously -
+    // REAPER does for discrete VST3 params - and must not revert the GUI).
+    void requestEngineState (int index);
+
     // Snapshot of the last playhead read (P0 spike; editor uses it until P3).
     struct PlayheadSnapshot
     {
@@ -229,6 +235,7 @@ private:
                                    -1.0f, -1.0f, -1.0f, -1.0f };
 
     double sampleRate_ = 48000.0;
+    int lastBlockSamples_ = 512;
 
     PlayheadAdapter playhead;
 
@@ -247,6 +254,14 @@ private:
     std::atomic<int> diagEngineParamChanges { 0 };
     std::atomic<int> diagEngineSwitches { 0 };
     std::atomic<int> diagEngineListenerHits { 0 }; // APVTS listener fires
+
+    // Host-echo guard (S11 mitigation analog): after any engine switch the
+    // host may push its own cached param value back (REAPER does this for
+    // discrete VST3 params on UI focus changes). Param-driven switches are
+    // ignored for a short grace window after every switch; genuine host
+    // automation still applies once the window passes. GUI switches bypass
+    // the param entirely (engineQueue), so they always win.
+    std::atomic<int> echoGraceBlocks { 0 };
 
     runsp::PairTracker pairs;
     runsp::RunEngine engine;

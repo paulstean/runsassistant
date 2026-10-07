@@ -689,11 +689,11 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     for (int i = 0; i < 3; ++i)
     {
         engineButtons[i].setName ("Engine " + juce::String (engTip[i][0]));
-        engineButtons[i].onClick = [this, i, engineParam]
-        {
-            engineAttachment->setValueAsCompleteGesture (
-                engineParam->convertTo0to1 ((float) i));
-        };    }
+        // Direct switch: queued on the processor, bypassing the parameter
+        // (REAPER echoes cached param values back on UI focus changes and
+        // would ping-pong a gesture-driven edit; S3.1/S11).
+        engineButtons[i].onClick = [this, i] { processor.requestEngineState (i); };
+    }
     engineAttachment->sendInitialUpdate();
 
     // ---- Scale rows (S9 / D12) ------------------------------------------
@@ -813,6 +813,29 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     walkAttachment =
         std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
             processor.apvts, "walk", zigzagButton);
+    // Fold mirrors the inverted value via the editor APVTS listener; both
+    // follow inbound CC/automation (note: Fold has no attachment - the
+    // listener keeps the radio pair mutually exclusive).
+    foldButton.setToggleState (
+        ! zigzagButton.getToggleState(), juce::dontSendNotification);
+    zigzagButton.onClick = [this]
+    {
+        zigzagButton.setToggleState (true, juce::dontSendNotification);
+        foldButton.setToggleState (false, juce::dontSendNotification);
+        auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+            processor.apvts.getParameter ("walk"));
+        if (p != nullptr)
+            p->setValueNotifyingHost (p->convertTo0to1 (1.0f));
+    };
+    foldButton.onClick = [this]
+    {
+        foldButton.setToggleState (true, juce::dontSendNotification);
+        zigzagButton.setToggleState (false, juce::dontSendNotification);
+        auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+            processor.apvts.getParameter ("walk"));
+        if (p != nullptr)
+            p->setValueNotifyingHost (p->convertTo0to1 (0.0f));
+    };
 
     // ---- Bottom row (S9) -------------------------------------------------
     settingsButton.setTooltip (
@@ -903,6 +926,21 @@ void RunsEditor::parameterChanged (const juce::String& paramID, float)
     // keeps the stored tick set.
     if (paramID == "tonic" || paramID == "mode")
         refreshScaleTicks (false);
+    if (paramID == "walk")
+    {
+        // Mirror the radio pair from inbound CC/automation (D13).
+        auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+            processor.apvts.getParameter ("walk"));
+        if (p != nullptr)
+        {
+            const int idx = (int) std::lround (
+                juce::jlimit (0.0f, 1.0f, p->convertFrom0to1 (p->getValue())));
+            refreshGuard = true;
+            zigzagButton.setToggleState (idx == 1, juce::dontSendNotification);
+            foldButton.setToggleState (idx == 0, juce::dontSendNotification);
+            refreshGuard = false;
+        }
+    }
 }
 
 void RunsEditor::pitchTickChanged (int pitchClass)
