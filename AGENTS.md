@@ -46,7 +46,8 @@ not nest). Reopen REAPER and re-add the plug-in.
 - Every consumed MIDI event is consumed by a documented spec rule (S3.2,
   S5.8); pass-through events pass with original offsets.
 - Tests: `ctest --test-dir build/win-x64 -C Release --output-on-failure`
-  must stay green after every change (P0/P1/P2/P3 tools).
+  must stay green after every change (P0/P1/P2/P3 tools + P4
+  InvariantsTests randomized-session harness).
 
 ## Git conventions
 

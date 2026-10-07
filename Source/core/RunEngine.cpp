@@ -10,15 +10,18 @@ namespace
 {
 constexpr double kBeatEps = 1e-9; // float-comparison guard (S6.2 house rule)
 
-inline double weightForBeat (double absBeat, int barNumerator)
+inline double weightForBeat (double fromBarOrigin, int barNumerator)
 {
-    // S5.7: weight = 1.0 on a bar line, 0.75 otherwise (bar line = beat %%
-    // timeSigNumerator over absolute beat space; caller supplies the
-    // time signature numerator; 0/absent disables bar detection).
-    if (barNumerator <= 0) return 0.75; // treat every beat as mid-bar
-    const long long b = (long long) std::floor (absBeat + kBeatEps);
-    return (b % (long long) barNumerator) == 0 ? runsp::kDownbeatWeight
-                                               : runsp::kMidBarWeight;
+    // S5.7: weight = 1.0 on a bar line, 0.75 otherwise. Bar lines are
+    // fromBarOrigin %% timeSigNumerator == 0; the caller supplies the beat
+    // distance from the bar origin and the time-signature numerator; 0 or
+    // absent numerator disables bar detection.
+    if (barNumerator <= 0) return runsp::kMidBarWeight;
+    const long long b = (long long) std::floor (fromBarOrigin + kBeatEps);
+    return (((b % (long long) barNumerator) + (long long) barNumerator)
+                % (long long) barNumerator) == 0
+               ? runsp::kDownbeatWeight
+               : runsp::kMidBarWeight;
 }
 } // namespace
 
@@ -89,6 +92,10 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
 
     // S5.3: velocities (linear by note index; accent bar weights per S5.7,
     // absolute beat distance computed here from the aligned start beat).
+    // S5.7: downbeat weight at bar lines. Bar origin: the host bar start
+    // when available (passed via RunParams.hasBarOrigin), else the run's own
+    // start beat counts as beat 1 (S5.7).
+    const double barOrigin = p.hasBarOrigin ? p.barOriginBeats : startBeat_;
     const double vStart = dirUp ? (double) t.velLo : (double) t.velHi;
     const double vEnd   = dirUp ? (double) t.velHi : (double) t.velLo;
     gate_ = p.gateFraction < 0.0 ? 0.0
@@ -99,7 +106,7 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
         const double f = absBeat - std::floor (absBeat);
         const double d = f < 0.5 ? f : 1.0 - f;
         const double falloff = accentFalloff (d);
-        const double w = weightForBeat (absBeat, p.barNumerator);
+        const double w = weightForBeat (absBeat - barOrigin, p.barNumerator);
         pitches_[i] = (uint8_t) walkOut[i];
         vels_[i] = (uint8_t) computeVelocity (vStart, vEnd,
             count_ > 1 ? (double) i / (dn - 1.0) : 0.0,

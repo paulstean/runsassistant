@@ -20,7 +20,12 @@ PlayheadAdapter::Block PlayheadAdapter::update (
     // Playing with ppq (S5.1 first bullet). CurrentPositionInfo cannot express
     // a missing ppq, so "playing" is treated as "ppq present" (REAPER, the
     // primary validation host, provides ppq while playing; see the P0 spike).
-    const bool nowPpq = haveInfo && info->isPlaying;
+    // P4 hardening FIX (S13.9): hosts that report playing WITHOUT a ppq
+    // position (ppqPosition < 0 in CurrentPositionInfo) must fall back to the
+    // virtual clock, not run on a garbage beat base (b0 = -1 shifted every
+    // onset). hosts  that report playing without ppq fall back to the
+    // virtual clock rather than the real grid (S13 deviation 9).
+    const bool nowPpq = haveInfo && info->isPlaying && info->ppqPosition >= 0.0;
     if (nowPpq)
     {
         if (hadPpq_)
@@ -72,8 +77,16 @@ PlayheadAdapter::Block PlayheadAdapter::update (
         return blk;
     }
 
-    blk.ppqPlaying = true;
-    if (blk.discont)
+        blk.ppqPlaying = true;
+        // P4 hardening FIX (S5.7): host bar-line origin, ppq mode only.
+        // JUCE's PositionInfo->CurrentPositionInfo conversion leaves
+        // ppqPositionOfLastBarStart = 0 when the host never provides it, so
+        // "available" cannot be detected: the ppq grid origin 0 IS a valid
+        // downbeat for ppq timing. In virtual-clock mode the engine anchors
+        // bar lines on the run's own start beat instead (S5.7 fallback).
+        blk.hasBarOrigin = blk.hasTimeSig && info->ppqPositionOfLastBarStart >= 0.0;
+        blk.barOrigin = blk.hasBarOrigin ? info->ppqPositionOfLastBarStart : 0.0;
+        if (blk.discont)
     {
         // Re-anchor so the next block compares against the new position.
         lastB0_ = blk.b0;

@@ -2,6 +2,7 @@
 // pair detection matrix, epsilon alignment, endpoint snapping, walk modes,
 // gate math, cut semantics, velocity stack, tail-end steady.
 
+#include <cmath>
 #include <vector>
 
 #include "TestFramework.h"
@@ -477,5 +478,120 @@ TEST_CASE (engine_tail_end_steady)
         CHECK_NEAR (tail[0].beat, 50.0, 1e-12);
     }
     CHECK (! e.isActive());
+}
+
+// P4 hardening regressions from the live REAPER reports: emission gates at
+// high density (S5.5/S5.8: no zero or negative gates at density 16) and the
+// accent bar weights (S5.7: host bar origin when available, else the run's
+// own start beat is beat 1; custom numerator support).
+
+TEST_CASE (engine_gate_at_high_density)
+{
+    // Reported with density 16: n = 16 x 16 = 256 notes; the count is full,
+    // every interior gate is strictly positive for the practically reachable
+    // curve strengths. At k > ~7 the normative power-S map collapses the
+    // last couple of adjacent onsets below double precision (and their
+    // mirror at the run start), which is a property of S5.5 rather than an
+    // emission bug: gaps stay non-negative there.
+    for (double curve : { 0.0, 0.25, 0.5, 0.75, 0.9, 1.0 })
+    {
+        RunEngine e;
+        RunParams p = basicParams (16.0, 16);
+        p.curveStrength = curve;
+        CHECK (e.startRun (trig (60, 72, 0.0), p));
+        CHECK_EQ (e.noteCount(), 256);
+        for (int i = 0; i + 1 < 256; ++i)
+        {
+            const double gap = e.onsetOf (i + 1) - e.onsetOf (i);
+            CHECK (gap >= 0.0); // monotonic (S5.5)
+            CHECK (e.gateOf (i) >= 0.0); // gates never negative (S5.8)
+            CHECK (e.gateOf (i) <= 0.6 * gap + 1e-12);
+            if (curve <= 0.5)
+            {
+                CHECK (gap > 0.0);
+                CHECK (e.gateOf (i) > 0.0); // no zero gates at density 16
+            }
+        }
+        e.cancel();
+    }
+}
+
+TEST_CASE (engine_accent_bar_origin_and_weights)
+{
+    // S5.7: weight = 1.0 on bar lines, 0.75 otherwise, relative to the bar
+    // origin (host-provided here); falloff 1 on the line, 0 at half a beat.
+    constexpr double wBar = 1.0, wMid = 0.75;
+    // Case 1: trigger on beat 8.0, host bar origin at 2.5, numerator 3.
+    // startBeat = 8.0 (epsilon 0); n = 8 with linear onsets rel = 8*i/7
+    // beats so abs = 8 + 8*i/7. falloff = 1 (all notes on integer-ish...
+    // falloff varies): fromBar = abs - 2.5.
+    {
+        RunEngine e;
+        RunParams p = basicParams (1.0, 8);
+        p.accentStrength = 0.2;
+        p.hasBarOrigin = true;
+        p.barOriginBeats = 2.5;
+        p.barNumerator = 3;
+        CHECK (e.startRun (trig (60, 72, 8.0), p)); // start beat 8.0
+        CHECK_EQ (e.noteCount(), 8);
+        for (int i = 0; i < 8; ++i)
+        {
+            const double absBeat = 8.0 + 8.0 * (double) i / 7.0;
+            const double fromBar = absBeat - 2.5;
+            const bool onBar =
+                ((long long) std::floor (fromBar + 1e-9) % 3) == 0;
+            const double f = absBeat - std::floor (absBeat);
+            const double d = f < 0.5 ? f : 1.0 - f;
+            const double falloff = d < 0.5 ? 1.0 - 2.0 * d : 0.0;
+            const double w = onBar ? wBar : wMid;
+            CHECK_EQ (e.velocityOf (i),
+                      (int) std::lround (100.0
+                                         * (1.0 + 0.2 * w * falloff)));
+        }
+        e.cancel();
+    }
+    // Case 2: no host bar origin -> the run's own start beat is beat 1
+    // (S5.7): every numerator-th note from the start is a bar line. Beats 7
+    // with density 8/7 -> n = 8 and linear onsets land exactly on integers.
+    {
+        RunEngine e;
+        RunParams p = basicParams (8.0 / 7.0, 7);
+        p.accentStrength = 0.2;
+        p.hasBarOrigin = false;
+        p.barNumerator = 4;
+        CHECK (e.startRun (trig (60, 72, 11.3), p)); // start beat 12
+        CHECK_EQ (e.noteCount(), 8);
+        for (int i = 0; i < 8; ++i)
+        {
+            const bool onBar = (i % 4) == 0; // rel beat = i
+            const double w = onBar ? wBar : wMid;
+            CHECK_EQ (e.velocityOf (i),
+                      (int) std::lround (100.0 * (1.0 + 0.2 * w)));
+        }
+        e.cancel();
+    }
+    // Case 3: falloff: on the line = full weight; half a beat away = zero
+    // boost. Beats 4, density 2.25 -> n = 9, linear onsets i/2 beats: odd i
+    // sit exactly half a beat off the line. Trigger at 3.75 -> start 4.0.
+    {
+        RunEngine e;
+        RunParams p = basicParams (2.25, 4);
+        p.accentStrength = 0.2;
+        p.arc = 0.0;
+        p.hasBarOrigin = false;
+        p.barNumerator = 4;
+        CHECK (e.startRun (trig (60, 72, 3.75), p));
+        CHECK_EQ (e.noteCount(), 9);
+        for (int i = 0; i < 9; ++i)
+        {
+            if (i % 2)
+                CHECK_EQ (e.velocityOf (i), 100); // half-beat: no boost
+            else if (i % 8 == 0)
+                CHECK_EQ (e.velocityOf (i), 120); // bar line: full weight
+            else
+                CHECK_EQ (e.velocityOf (i), 115); // mid-bar beat
+        }
+        e.cancel();
+    }
 }
 

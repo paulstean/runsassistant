@@ -588,9 +588,15 @@ void testKeyswitchStopAndPassthrough()
         { 0, juce::MidiMessage::noteOn (1, (juce::uint8) 13, (juce::uint8) 100) },
     }), 1);
     CHECK (r.out.empty()); // absorbed while engine Up/Down
-    // now Off: keyswitches pass through (S3.1)
+    // now Off: keyswitches pass through (S3.1). Parameter-driven engine
+    // changes are one-shot-detected and lost inside the echo-grace window
+    // (P4 host-echo guard), so expire the window BEFORE the change.
+    for (int i = 0; i < 11; ++i)
+        r.step (nullptr); // echo grace expires
     setEngine (p, 0);
-    r.step (nullptr); // engine param change -> Off
+    for (int i = 0; i < 3; ++i)
+        r.step (nullptr); // engine param change -> Off
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
     const auto prev = r.out.size();
     const juce::MidiBuffer ks = bufferOf ({
         { 3, juce::MidiMessage::noteOn (1, (juce::uint8) 13, (juce::uint8) 100) },
@@ -801,9 +807,138 @@ void testChunkVersionRejected()
     RunsProcessor b;
     auto blob = (uint8_t*) data.getData();
     const uint32_t v = 999;
-    std::memcpy (blob + 4, &v, 4); // version 999: reject, keep state
+    std::memcpy (blob + 4, &v, 4); // version 999: reject, keep current state (S7)
     b.setStateInformation (blob, (int) data.getSize());
     CHECK (allDefaults (b));
+}
+
+// ------------------------------------------------------- engine-switch chain
+// P4 hardening regressions (reported: "clicking Up highlights Down"): every
+// engine state must land exactly, via BOTH the GUI queue path
+// (requestEngineState) and the APVTS parameter path, and a host param echo
+// inside the grace window must NOT revert the state.
+
+void stepN (RunsProcessor& p, Runner& r, int n)
+{
+    for (int i = 0; i < n; ++i) r.step (nullptr);
+}
+
+void testEngineChainQueuePath()
+{
+    for (int state = 0; state <= 2; ++state)
+    {
+        RunsProcessor p;
+        p.prepareToPlay (44100.0, 2048);
+        Runner r (p, 2048);
+        p.requestEngineState (state);
+        stepN (p, r, 2);
+        CHECK_EQ ((int) p.publishedEngineState.load(), state);
+    }
+}
+
+void testEngineChainParamPath()
+{
+    // grace starts 0 but rises after any switch, so each state starts from a
+    // FRESH processor (its first block applies the param change directly).
+    for (int state = 0; state <= 2; ++state)
+    {
+        RunsProcessor p;
+        p.prepareToPlay (44100.0, 2048);
+        Runner r (p, 2048);
+        stepN (p, r, 1); // settle: raw-atomics cache filled at defaults
+        setEngine (p, state);
+        stepN (p, r, 2);
+        CHECK_EQ ((int) p.publishedEngineState.load(), state);
+    }
+}
+
+void testEngineChainSequence()
+{
+    // chained switches: queue path 1, 2, 0, then param path 1, 2
+    RunsProcessor p;
+    p.prepareToPlay (44100.0, 2048);
+    Runner r (p, 2048);
+
+    p.requestEngineState (1);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1);
+    p.requestEngineState (2);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 2);
+    p.requestEngineState (0);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
+
+    stepN (p, r, 40);   // let the echo grace window expire
+    setEngine (p, 1);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1);
+    stepN (p, r, 40);
+    setEngine (p, 2);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 2);
+}
+
+void testEngineEchoIgnoredDuringGrace()
+{
+    // Host-echo regression: REAPER pushes its cached discrete-param value
+    // back shortly after UI focus events; within the grace window that echo
+    // must not revert the engine (reported "clicking Up highlights Down").
+    RunsProcessor p;
+    p.prepareToPlay (44100.0, 2048);
+    Runner r (p, 2048);
+    p.requestEngineState (1); // click Up
+    stepN (p, r, 1);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1);
+
+    setEngine (p, 2);          // stale cached param echo (Down)
+    stepN (p, r, 5);           // well inside the 0.5 s grace window
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1); // echo ignored
+    stepN (p, r, 30);          // grace window expires
+    // The stale echo already consumed the raw value 2; genuine host
+    // automation applies once the window passes (new value writes still
+    // reach the block path). Walk 2 -> 0 -> 2 through fresh writes, each
+    // after letting the previous switch's own grace expire.
+    setEngine (p, 0);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
+    stepN (p, r, 30);          // br the 0-switch's grace expires
+    setEngine (p, 2);
+    stepN (p, r, 2);
+    CHECK_EQ ((int) p.publishedEngineState.load(), 2);
+}
+
+void testEngineSwitchCutsActiveRunBothPaths()
+{
+    // A queued engine switch cuts the active run at block start; the cut
+    // note-offs land at sample 0 (23 whole sounding notes). The passthrough
+    // mode afterwards: a fresh note passes untouched.
+    RunsProcessor p;
+    setUpMatrix (p);
+    Runner r (p, 2048);
+    r.run (bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+        { 0, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 110) },
+    }), 0); // trigger block only: note 60 is sounding now
+    CHECK_EQ (countIf (r.out, isNoteOn), 1);
+    const auto prev = r.out.size();
+    p.requestEngineState (0);
+    r.step (nullptr);
+    bool cutAtStart = false;
+    for (int i = (int) prev; i < (int) r.out.size(); ++i)
+        if (r.out[i].msg.isNoteOff() && r.out[i].sample == 0)
+            cutAtStart = true;
+    CHECK (cutAtStart);
+    const auto uiState = p.latestUiState();
+    CHECK_EQ (uiState.cuts, 1);
+    // passthrough mode afterwards: a fresh note passes untouched
+    const auto prev2 = r.out.size();
+    const juce::MidiBuffer single = bufferOf ({
+        { 11, juce::MidiMessage::noteOn (1, 55, (juce::uint8) 90) },
+    });
+    r.step (&single);
+    CHECK (r.out.size() == prev2 + 1);
+    CHECK (hasEventAt (r.out, r.block - 1, 11, true, 55));
 }
 } // namespace
 
@@ -831,6 +966,11 @@ int main()
     testChunkTrailingGarbageIgnored();
     testChunkWrongMagicRejected();
     testChunkVersionRejected();
+    testEngineChainQueuePath();
+    testEngineChainParamPath();
+    testEngineChainSequence();
+    testEngineEchoIgnoredDuringGrace();
+    testEngineSwitchCutsActiveRunBothPaths();
     std::printf ("%s (%d failures)\n",
                  failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

@@ -71,6 +71,11 @@ public:
 
     // Reset everything (engine state composition; no events produced).
     void resetAll();
+    // P4 hardening: clears per-channel pairing state but KEEPS the session
+    // diagnostic counters (latePublishes is surfaced in the overlay and
+    // must not be erased by engine switches, S5.2/S5.8). Used by
+    // doEngineChange; resetAll() remains for prepareToPlay.
+    void clearAll();
 
     // S5.2 flush: publish all pending notes late (engine switch to Off).
     void flushAll (PairOutcome* outs, int cap, int* publishedCount);

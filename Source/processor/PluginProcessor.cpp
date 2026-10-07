@@ -116,15 +116,16 @@ RunsProcessor::RunsProcessor()
                 owner.diagEngineListenerHits.load (std::memory_order_relaxed)
                     + 1,
                 std::memory_order_relaxed);
-            if (auto* p = owner.ranged[kEngineIndex])
-            {
-                auto* raw = owner.rawParam[kEngineIndex];
-                const float plain = raw != nullptr
-                                        ? raw->load (std::memory_order_relaxed)
-                                        : p->convertFrom0to1 (p->getValue());
-                owner.engineQueue.push (
-                    (int) std::lround (juce::jlimit (0.0f, 2.0f, plain)));
-            }
+            // P4 hardening FIX: this listener no longer enqueues into
+            // engineQueue. A message-thread listener also fires on host
+            // params echoes (REAPER pushes cached discrete-param values back
+            // on UI focus events, outside any grace window): the echo
+            // re-entered through the queue, reverted the engine state and
+            // flipped the GUI highlight (reported: "clicking Up highlights
+            // Down", sw:2998). Param-origin switches are now detected by the
+            // AUDIO thread only (syncLiveValues raw-atomics change probe),
+            // which sits behind the host-echo grace window; genuine host
+            // automation still applies once the window passes (S5.6/S11).
         }
         RunsProcessor& owner;
     };
@@ -484,7 +485,7 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
     for (int k = 0; k < flushed; ++k)
         emitLatePublish (outs[k].channel + 1, outs[k].a.pitch,
                          outs[k].a.velocity, sampleOffset);
-    pairs.resetAll();
+    pairs.clearAll(); // state only; latePublishes counter survives (S5.8)
     engineState_ = newState;
     diagEngineSwitches.store (diagEngineSwitches.load (std::memory_order_relaxed)
                               + 1, std::memory_order_relaxed);
@@ -856,10 +857,14 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
 
         if (engineOn && m.isNoteOff())
         {
+            // S3.1: the keyswitch note numbers are consumed only in note
+            // source mode (P4 hardening: in CC/PC mode these pitches are
+            // ordinary melody notes and their offs must pass through).
             bool isKeyswitchOff = false;
-            for (int k = 0; k < 3; ++k)
-                if (m.getNoteNumber() == settings.engineNoteNumbers[k])
-                    isKeyswitchOff = true;
+            if (settings.engineSourceType == 0)
+                for (int k = 0; k < 3; ++k)
+                    if (m.getNoteNumber() == settings.engineNoteNumbers[k])
+                        isKeyswitchOff = true;
             if (! isKeyswitchOff)
             {
                 // S5.6: either trigger note released -> cut at this offset.
@@ -989,6 +994,8 @@ runsp::RunParams RunsProcessor::makeRunParams (
     p.epsilonBeats = juce::jlimit (0.0, 16.0,
         (double) settings.epsilonMs * 0.001 * blk.bpm / 60.0);
     p.barNumerator = blk.hasTimeSig ? blk.timeSigNumerator : 4; // S5.7 4/4 default
+    p.hasBarOrigin = blk.hasBarOrigin; // S5.7 host bar origin when provided
+    p.barOriginBeats = blk.barOrigin;
     p.alignToGrid = blk.ppqPlaying; // S5.1: virtual clock skips alignment
     return p;
 }

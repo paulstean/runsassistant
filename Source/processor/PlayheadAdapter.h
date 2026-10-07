@@ -29,6 +29,8 @@ public:
         double bpm = 120.0;           // default 120 until anything is known
         bool hasTimeSig = false;      // absent -> 4/4 defaults (S5.1/S5.7)
         int timeSigNumerator = 4;
+        bool hasBarOrigin = false;    // host bar-start ppq available (S5.7)
+        double barOrigin = 0.0;       // host bar start beat (S5.7)
         double b0 = 0.0;              // block START beat (B0)
         double b1 = 0.0;              // block END beat (B1)
         double beatsPerBlock = 0.0;

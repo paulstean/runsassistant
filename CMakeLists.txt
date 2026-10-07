@@ -175,6 +175,22 @@ if (RUNS_BUILD_TESTS)
     target_include_directories(CoreTests PRIVATE tests Source)
     add_test(NAME CoreTests COMMAND CoreTests)
 
+    # ---------------------------------------- InvariantsTests (P4, randomized)
+    # Long randomized sessions against the REAL processBlock with a stub
+    # playhead; asserts global stream invariants (S10).
+    add_executable(InvariantsTests
+        tests/InvariantsTests.cpp
+        ${RUNS_SOURCES}
+        ${RUNS_CORE_SOURCES})
+    target_include_directories(InvariantsTests PRIVATE Source)
+    target_link_libraries(InvariantsTests PRIVATE juce::juce_audio_utils)
+    target_compile_definitions(InvariantsTests PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0)
+    add_test(NAME InvariantsTests COMMAND InvariantsTests)
+
     # Source/core must stay JUCE-free (plain C++17, testable standalone;
     # failed configure otherwise, same house rule as Eloquent).
     file(GLOB_RECURSE RUNS_CORE_FILES CONFIGURE_DEPENDS

@@ -526,6 +526,15 @@ once).
 9. "Playing" is read as ppq known: hosts that report playing without ppq
    fall back to the virtual clock rather than the real grid (host limitation,
    found in the JUCE wrapper).
+10. Bar-line origin (S5.7): the host bar start is used only in ppq-playing
+    mode; JUCE's `PositionInfo -> CurrentPositionInfo` conversion leaves
+    `ppqPositionOfLastBarStart = 0` when the host never provides it, so
+    "available" is undetectable. In ppq mode the origin 0 IS the ppq
+    downbeat (planned behavior: host bar start when available; shipped:
+    host value in ppq mode, run start otherwise); in virtual-clock mode bar
+    lines are anchored on the run's own start beat exactly as S5.7's
+    fallback specifies. Reason: the ppq grid origin is a downbeat in every
+    mainstream host, and "unset" cannot be distinguished from "bar 0".
 
 Any further deviation found during implementation must be appended here with the
 planned behavior, the shipped behavior, and the reason.

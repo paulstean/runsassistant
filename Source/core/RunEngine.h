@@ -57,6 +57,10 @@ struct RunParams
     double gateFraction = 0.6; // S5.8 settings value (clamped 0..1)
     double epsilonBeats = 0.0; // S5.1 alignment epsilon (beats)
     int barNumerator = 4;      // timeSig numerator for bar lines, 0 = none (S5.7)
+    // S5.7: bar-line origin. Host bar start when available; otherwise the
+    // engine anchors bar lines on the run's own start beat (beat 1).
+    bool hasBarOrigin = false;
+    double barOriginBeats = 0.0;
     // ADDITIVE (P2): S5.1 virtual-clock mode skips alignment (the trigger
     // defines beat 0); ppq mode aligns forward to the next integer beat.
     bool alignToGrid = true;

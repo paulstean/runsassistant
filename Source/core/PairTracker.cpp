@@ -12,6 +12,13 @@ void PairTracker::resetAll()
     latePublishes_ = 0;
 }
 
+void PairTracker::clearAll()
+{
+    for (int c = 0; c < kNumChannels; ++c)
+        channels_[c].clear();
+    // latePublishes_ intentionally kept (session diagnostics, S5.8).
+}
+
 void PairTracker::flushAll (PairOutcome* outs, int cap, int* publishedCount)
 {
     // S5.2: engine switch to Off: flush all pending notes (publish late).
