@@ -437,21 +437,23 @@ Overlap (bool). Settings and CC bindings are chunk-only, never parameters.
 
 ## 9. UI specification
 
-Default window 960 x 420, resizable within 720 x 320 .. 1400 x 600, DPI-aware,
-dark theme (Eloquent palette). No graphs, no list, no playhead display.
+Default window 960 x 420, resizable within 720 x 390 .. 1400 x 600, DPI-aware,
+dark theme (Eloquent palette). One graph: the curve shape preview (below).
+No list, no playhead display.
 
 ```
 +----------------------------------------------------------------------------+
-| RUNS ASSISTANT          Engine: [Off] [Up] [Down]                          |
+| RUNS ASSISTANT      [Settings]   Engine: [Off] [Up] [Down]                  |
 +----------------------------------------------------------------------------+
 | Tonic [C v]   Mode [Major v]                                               |
 | [x]C [x]C# [x]D [x]D# [x]E [x]F [x]F# [x]G [x]G# [x]A [x]A# [x]B           |
 +----------------------------------------------------------------------------+
-| Beats  [ 4 ]      Density [====o----] 4.0 n/beat                           |
-| Curve   [====o----] 50%    Accent [====o----] 50%    Arc [o------] 0%      |
-| Walk: ( ) Fold  ( ) Zig-zag   Overlap: [ ] On                              |
+| Beats  [ 4 ]      Density [====o----] 5.0 n/beat                           |
+| Curve   [==o-------] 22%   Accent [===o-----] 41%    Arc [==o-----] +15%    |
+| Walk: ( ) Fold  (x) Zig-zag   Overlap: [x] On                              |
+| [ curve preview: smooth curve bottom-left to top-right (Up), mirrored for Down ] |
 +----------------------------------------------------------------------------+
-| Settings...                                              [Debug overlay]   |
+|                                                          [Debug overlay]   |
 +----------------------------------------------------------------------------+
 ```
 
@@ -471,6 +473,19 @@ dark theme (Eloquent palette). No graphs, no list, no playhead display.
   Hover tooltips state the effect in plain language. All sliders mirror bound CCs
   (subsection 4) in real time without dirtying the chunk from MIDI input.
 * **Walk radios:** Fold / Zig-zag, one selection.
+* **Curve shape preview:** a square static graph under the Walk/Overlap row plots
+  the run itself as one smooth curve: horizontal = exact onset time
+  (`beats x curveMap(i/(n-1))`, the engine's own maths sampled across the run;
+  n = round(density x beats) live from the sliders, clamped for display),
+  vertical = pitch progress through the run. With Engine up the curve runs from
+  bottom-left (first note, start of time) to top-right (last note, end of time);
+  with Engine down it is mirrored, from top-left to bottom-right (Engine off
+  shows the up shape). One dot per run note sits on the curve at its exact
+  onset. A faint diagonal ghost marks the even (0 percent) sweep: at 0 percent
+  the curve is that straight line, and higher curve values bend it away from it
+  (slow start, quick middle, slow finish). Curve/Beats/Density changes and the
+  Engine switch re-render it live. Illustrative only: not interactive, no
+  playhead cursor.
 * **Overlap toggle:** Off/On checkbox next to the walk radios (host parameter,
   saved in the chunk); see 5.8 for the emission rule.
 * **Settings dialog:** engine source type (Notes / CC / PC) + its event numbers;
@@ -530,7 +545,7 @@ dark theme (Eloquent palette). No graphs, no list, no playhead display.
 ## 12. Deferred v2
 
 Pair window length + grace-note timeout; velocity humanization (per-note random
-deflection); user-drawable curve shape (replacing the one-slider S); negative
+deflection); negative
 curve direction (fast start); chord/trill ornaments in runs; scale inference from
 the trigger pair; text preset files; undo manager; light theme + full theme
 editor; AAX; Linux release binaries; per-channel run state (several pairs at

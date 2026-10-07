@@ -141,7 +141,7 @@ Exit criteria:
 ## P5 - v2 backlog (not scheduled)
 
 Per S12: pair-window tuning + grace-note timeout, velocity humanization,
-drawable curve, fast-start curve direction, ornaments (chords/trills),
+fast-start curve direction, ornaments (chords/trills),
 scale inference, presets, undo, AU port, light theme, AAX, Linux, multi-run
 polyphony.
 

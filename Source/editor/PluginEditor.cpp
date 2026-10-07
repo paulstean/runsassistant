@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include "../core/CurveMap.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -51,6 +53,112 @@ float parseFloat (const juce::String& s, float lo, float hi, bool* ok)
     return v;
 }
 } // namespace
+
+// Curve shape preview (S9): the run plotted as one smooth curve, x = exact
+// onset time and y = pitch progress through the run, both derived from
+// runsp::curveMap - the exact function the engine uses for onset placement
+// (RunEngine: onset = beats x curveMap(i/(n-1))). Engine up runs from
+// bottom-left (first note, start of time) to top-right (last note, end of
+// time); Engine down mirrors it, top-left to bottom-right (Engine off shows
+// the up shape). One dot per run note sits on the curve at its exact onset.
+// The faint diagonal ghost is the even (0%) sweep: at 0 percent the curve is
+// that straight line, and stronger curve values bend it away from it.
+class CurveView : public juce::Component,
+                  public juce::SettableTooltipClient
+{
+public:
+    void setShape (double curveStrength, int notes, bool runUp)
+    {
+        const int n = juce::jlimit (1, 64, notes);
+        if (curveStrength != strength || n != noteCount || runUp != up)
+        {
+            strength = curveStrength;
+            noteCount = n;
+            up = runUp;
+            repaint();
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (3.0f);
+        g.setColour (runui::fieldBg());
+        g.fillRoundedRectangle (r, 4.0f);
+        g.setColour (runui::edge());
+        g.drawRoundedRectangle (r, 4.0f, 1.0f);
+
+        const float x0 = r.getX() + 9.0f;
+        const float x1 = r.getRight() - 9.0f;
+        const float railY = r.getBottom() - 9.0f;
+        const float yTop = r.getY() + 8.0f;
+        const float yBot = railY - 6.0f;
+
+        // x = onset time through the run; y = pitch progress (0 at the run's
+        // first note, 1 at its last), rising for Up and falling for Down.
+        const auto px = [&] (double t) {
+            return x0 + (float) t * (x1 - x0);
+        };
+        const auto py = [&] (double p) {
+            const float f = (float) p;
+            return up ? yBot - f * (yBot - yTop)
+                      : yTop + f * (yBot - yTop);
+        };
+
+        // ghost: the even (0 percent) sweep is the straight diagonal
+        {
+            juce::Path ghost;
+            ghost.startNewSubPath (x0, py (0.0));
+            ghost.lineTo (x1, py (1.0));
+            g.setColour (runui::dim().withAlpha (0.45f));
+            g.strokePath (ghost, juce::PathStrokeType (1.0f));
+        }
+
+        // time rail (x axis = position through the run in time)
+        g.setColour (runui::edge());
+        g.fillRect (juce::Rectangle<float> (x0, railY - 1.0f, x1 - x0, 2.0f));
+
+        // the curve: sample the engine's own map across the whole run
+        {
+            juce::Path curvePath;
+            constexpr int kSamples = 96;
+            for (int i = 0; i <= kSamples; ++i)
+            {
+                const double u = (double) i / (double) kSamples;
+                const float cx = px (runsp::curveMap (u, strength));
+                const float cy = py (u);
+                if (i == 0)
+                    curvePath.startNewSubPath (cx, cy);
+                else
+                    curvePath.lineTo (cx, cy);
+            }
+            g.setColour (runui::accent().withAlpha (0.85f));
+            g.strokePath (curvePath,
+                          juce::PathStrokeType (2.0f,
+                                                juce::PathStrokeType::curved,
+                                                juce::PathStrokeType::rounded));
+        }
+
+        // one dot per run note, on the curve at its exact onset
+        g.setColour (runui::accent());
+        for (int i = 0; i < noteCount; ++i)
+        {
+            const double u = noteCount > 1
+                                 ? (double) i / (double) (noteCount - 1)
+                                 : 0.0;
+            fillDot (g, px (runsp::curveMap (u, strength)), py (u), 3.2f);
+        }
+    }
+
+private:
+    static void fillDot (juce::Graphics& g, float x, float y, float radius)
+    {
+        g.fillEllipse (x - radius, y - radius, radius * 2.0f, radius * 2.0f);
+    }
+
+    double strength = 0.22;
+    int noteCount = 20;
+    bool up = true;
+};
 
 class SettingsPanel : public juce::Component,
                       private juce::ComboBox::Listener,
@@ -374,7 +482,7 @@ private:
         // attachments and host learn of every change, exactly like GUI edits.
         static const char* ids[RunsProcessor::kNumParams] = {
             "engine", "beats", "density", "curve", "accent", "arc",
-            "tonic", "mode", "walk"
+            "tonic", "mode", "walk", "overlap"
         };
         for (int i = 0; i < RunsProcessor::kNumParams; ++i)
         {
@@ -775,6 +883,16 @@ RunsEditor::RunsEditor (RunsProcessor& p)
                 processor.apvts, sliderIds[i], sliderRows[i]->slider);
         sliderRows[i]->slider.addListener (this);
     }
+    curveView = std::make_unique<CurveView>();
+    curveView->setTooltip (
+        "Run shape preview: left to right is time through the run, bottom "
+        "to top is pitch progress (Engine up; Engine down mirrors it, top "
+        "left to bottom right). Each blue dot is one run note at its exact "
+        "onset, on the curve the engine actually uses. At 0% the curve is "
+        "the straight diagonal ghost (an even sweep); raising Curve bends "
+        "it: slow start, quick middle, slow finish. Follows Beats and "
+        "Density too.");
+    addAndMakeVisible (curveView.get());
     updateReadouts();
 
     // ---- Walk radios (S9 / D10) -----------------------------------------
@@ -859,8 +977,8 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     // ---- Window geometry (S9 + RUNV footer, S7) --------------------------
     int w, h;
     processor.getEditorWindowSize (w, h);
-    setResizeLimits (720, 320, 1400, 600); // S9 resize limits
-    setSize (juce::jlimit (720, 1400, w), juce::jlimit (320, 600, h));
+    setResizeLimits (720, 390, 1400, 600); // S9 resize limits
+    setSize (juce::jlimit (720, 1400, w), juce::jlimit (390, 600, h));
     startTimerHz (20); // engine-state mirror (host/CC writes included)
 }
 
@@ -876,6 +994,7 @@ void RunsEditor::timerCallback()
             engineButtons[i].setToggleState (i == state,
                                              juce::dontSendNotification);
         refreshGuard = false;
+        updateReadouts(); // curve preview flips with Up / Down
     }
 }
 
@@ -997,6 +1116,13 @@ void RunsEditor::sliderValueChanged (juce::Slider*)
 
 void RunsEditor::updateReadouts()
 {
+    if (curveView != nullptr)
+        curveView->setShape (
+            juce::jlimit (0.0, 1.0, curve.slider.getValue()),
+            juce::roundToInt (juce::jlimit (1.0, 16.0, density.slider.getValue())
+                                  * juce::jlimit (1.0, 16.0,
+                                                  beats.slider.getValue())),
+            engineButtonState != 2); // Down mirrors; Off shows the up shape
     beats.readout.setText (
         juce::String (juce::roundToInt (
             juce::jlimit (1.0, 16.0, beats.slider.getValue()))),
@@ -1056,12 +1182,18 @@ void RunsEditor::resized()
 {
     auto area = getLocalBounds().reduced (8);
 
-    // Title + engine row (S9)
+    // Title + engine row (S9): title left, Settings centre, engine right
     auto top = area.removeFromTop (28);
     title.setBounds (top.removeFromLeft (200));
     auto engArea = top.removeFromRight (240);
     for (int i = 0; i < 3; ++i)
         engineButtons[i].setBounds (engArea.removeFromLeft (80).reduced (2, 2));
+    {
+        auto mid = top;
+        mid.removeFromLeft ((mid.getWidth() - 120) / 2);
+        mid.removeFromRight ((mid.getWidth() - 120) / 2);
+        settingsButton.setBounds (mid.reduced (2, 2));
+    }
     area.removeFromTop (8);
 
     // Scale panel (D12)
@@ -1122,6 +1254,14 @@ void RunsEditor::resized()
     }
     area.removeFromTop (8);
 
+    // Curve shape preview (S9): square below the Walk/Overlap row
+    if (curveView != nullptr)
+    {
+        auto cv = area.removeFromTop (100);
+        curveView->setBounds (cv.removeFromLeft (100));
+    }
+    area.removeFromTop (8);
+
     // Debug overlay strip (S9 bottom row) when toggled on
     if (overlayPanel != nullptr)
     {
@@ -1129,9 +1269,10 @@ void RunsEditor::resized()
         area.removeFromTop (6);
     }
 
-    // Bottom row (S9)
+    // Bottom row (S9): Debug overlay toggle only; the Settings button lives
+    // in the header centre now that the curve preview strip lives here.
+
     auto bottom = area.removeFromTop (28);
-    settingsButton.setBounds (bottom.removeFromLeft (120).reduced (2, 2));
     debugToggle.setBounds (bottom.removeFromRight (140).reduced (2, 2));
 
     // RUNV footer (S7): persist the current editor window size.

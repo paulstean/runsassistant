@@ -9,13 +9,15 @@
 
 class SettingsPanel;
 class DebugOverlayPanel;
+class CurveView;
 
 // S9 panel (plan.md P3). Layout shell + dark theme + data-bound controls:
-//   title row:   title + engine Off/Up/Down toggles (engine param)
+//   title row:   title + Settings button + engine Off/Up/Down toggles
 //   scale row:   tonic combo, mode combo (17 entries), 12 pitch-class ticks
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
-//   bottom row:  Settings... dialog + Debug overlay toggle (S9)
+//   curve strip: square curve shape preview below the walk row (S9)
+//   bottom row:  Debug overlay toggle (S9)
 // Engine / scale / walk / overlap / slider state lives in the APVTS, so host
 // automation and bound-CC mirrors arrive through the attachments (S4/S11);
 // the processor observes an engine value change at block time and cuts the
@@ -92,13 +94,14 @@ private:
         overlapAttachment;
 
     // Bottom row
-    juce::TextButton settingsButton { "Settings..." };
+    juce::TextButton settingsButton { "Settings" };
     juce::ToggleButton debugToggle { "Debug overlay" };
 
     // owned in the .cpp (defined types live there)
     std::unique_ptr<SettingsPanel> settingsPanel;
     std::unique_ptr<juce::DialogWindow> settingsDialog;
     std::unique_ptr<DebugOverlayPanel> overlayPanel;
+    std::unique_ptr<CurveView> curveView;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RunsEditor)
 };
