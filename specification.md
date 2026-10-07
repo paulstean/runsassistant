@@ -510,6 +510,22 @@ once).
 4. No per-host routing documentation: note output (unlike CC legacy output)
    delivers inline in mainstream hosts; residual host issues documented when
    discovered, per host.
+5. Switching between real ppq beat space and the stopped virtual clock
+   (playing/stop boundary) cuts an active run: scheduled onsets in one beat
+   space are meaningless in the other (interpretation of 5.6 "transport
+   discontinuity").
+6. All-notes-off (CC 123) both passes through AND cuts the active run:
+   downstream instruments still need their own all-notes-off for passthrough
+   chord notes.
+7. Chunk: the optional RUNV window-size footer is always written; a short
+   tail (1..7 bytes) after the settings payload is treated as a truncated
+   chunk (rejected) rather than a footer (both rules from section 7).
+8. Degenerate snapped pairs (S5.4 snap removes the span after the pair was
+   consumed) are compensated by late-publishing both trigger notes at the
+   trigger offset, keeping the S5.8 "no silent drops" invariant.
+9. "Playing" is read as ppq known: hosts that report playing without ppq
+   fall back to the virtual clock rather than the real grid (host limitation,
+   found in the JUCE wrapper).
 
 Any further deviation found during implementation must be appended here with the
 planned behavior, the shipped behavior, and the reason.

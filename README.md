@@ -10,11 +10,11 @@ source (AGPLv3, per JUCE 8 licensing).
 
 | Phase | Status |
 |---|---|
-| P0 scaffold + passthrough spike | in progress |
-| P1 core engine (JUCE-free) | pending |
-| P2 processor + state + CC mapping | pending |
-| P3 editor | pending |
-| P4 validation + release | pending |
+| P0 scaffold + passthrough spike | done (REAPER load pass pending user) |
+| P1 core engine (JUCE-free) | done |
+| P2 processor + state + CC mapping | done (REAPER manual pass pending user) |
+| P3 editor | done (REAPER manual pass pending user) |
+| P4 validation + release | CI + pluginval + release packer in place; REAPER checklist pending user |
 
 ## Stack
 
@@ -53,10 +53,20 @@ and merges the VST3 bundle into `%COMMONPROGRAMFILES%\VST3\`.
 
 ## Playhead spike (P0)
 
-The editor shows the current playhead read (ppq / bpm / time signature /
-playing). To capture a per-block CSV log in REAPER (playing vs stopped),
+The debug overlay (bottom-right toggle) shows the current playhead read
+(beat / bpm) and engine state. To capture a per-block CSV log in REAPER,
 set an environment variable before starting REAPER:
 
 ```pwsh
 $env:RUNSASSISTANT_SPIKE_LOG = "H:\tmp\runs-spike.csv"
 ```
+
+## Release (P4)
+
+```pwsh
+pwsh tools/make-release.ps1
+```
+
+packs `out\RunsAssistant-<version>-win-x64.zip` (VST3 + CLAP + README
++ SHA256). CI (`.github/workflows/ci.yml`) builds all formats, runs CTest,
+and gates the VST3/CLAP through pluginval strictness 7.

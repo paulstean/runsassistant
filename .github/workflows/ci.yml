@@ -1,0 +1,51 @@
+# Runs Assistant - GitHub Actions CI (Windows).
+# Configure + build all formats, run the CTest suite, then pluginval strict
+# on the VST3 + CLAP artefacts (plan.md P4). Adapted from the Eloquent CI
+# pattern (windows-only until the D3 post-v1 AU phase).
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Configure
+        run: cmake --preset win-x64
+
+      - name: Build
+        run: cmake --build --preset win-x64
+
+      - name: CTest
+        run: ctest --test-dir build/win-x64 -C Release --output-on-failure
+
+      - name: Fetch pluginval
+        shell: pwsh
+        run: |
+          $tag = "v1.0.4"
+          Invoke-WebRequest -Uri "https://github.com/Tracktion/pluginval/releases/download/$tag/pluginval_Windows.zip" -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval
+
+      - name: pluginval (VST3 + CLAP, strictness 7)
+        shell: pwsh
+        run: |
+          $vst3 = "build/win-x64/RunsAssistant_artefacts/Release/VST3/Runs Assistant.vst3"
+          $clap = "build/win-x64/RunsAssistant_artefacts/Release/CLAP/Runs Assistant.clap"
+          foreach ($p in @($vst3, $clap)) {
+            .\pluginval\pluginval.exe --strictness-level 7 --validate $p --output-dir pluginval-logs --dump-audio-duration-secs 1
+          }
+      - name: Archive pluginval logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pluginval-logs
+          path: pluginval-logs/
