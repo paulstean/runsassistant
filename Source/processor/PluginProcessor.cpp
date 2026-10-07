@@ -47,6 +47,17 @@ constexpr int kChunkMinSize = 4                     // magic
     + kParamsV1 * 4                                 // v1 parameter values (min)
     + kSettingsBytes;
 
+// Parameter ids in GUI order (S8): the one list used by the ctor, the
+// clipboard JSON and any other id-driven sweep.
+const char* const kParamIds[RunsProcessor::kNumParams] = {
+    "engine", "beats", "density", "curve", "accent", "arc",
+    "tonic", "mode", "walk", "overlap"
+};
+
+// Clipboard JSON schema version (S7/S9); bumped when the payload shape
+// changes, older versions still load (chunk-style forward/backward rule).
+constexpr int kClipboardJsonVersion = 1;
+
 void writeU32 (juce::MemoryOutputStream& mo, uint32_t v) { mo.write (&v, 4); }
 
 uint32_t readU32 (const uint8_t* d)
@@ -85,14 +96,11 @@ RunsProcessor::RunsProcessor()
         .withInput ("Input", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
-    const char* ids[kNumParams] = { "engine", "beats", "density", "curve",
-                                    "accent", "arc", "tonic", "mode", "walk",
-                                    "overlap" };
     for (int i = 0; i < kNumParams; ++i)
     {
         ranged[i] = dynamic_cast<juce::RangedAudioParameter*> (
-            apvts.getParameter (ids[i]));
-        rawParam[i] = apvts.getRawParameterValue (ids[i]);
+            apvts.getParameter (kParamIds[i]));
+        rawParam[i] = apvts.getRawParameterValue (kParamIds[i]);
     }
     // live[] starts at the factory defaults (S4); it tracks GUI edits, host
     // automation and bound CCs last-writer-wins (S4).
@@ -710,6 +718,211 @@ void RunsProcessor::setStateInformation (const void* data, int sizeInBytes)
         ranged[i]->setValueNotifyingHost (ranged[i]->convertTo0to1 (params[i]));
     }
     settings = s;
+}
+
+// --------------------------------------------------------------------------
+// Clipboard preset (S7/S9): the whole chunk state as JSON text for the
+// editor's Copy to Clipboard / Paste from Clipboard buttons. Same payload as
+// the RUN1 chunk (parameters as real values + settings), so a paste behaves
+// like a project-state load; validation mirrors the chunk reader (range-clamp
+// every field, reject anything that is not ours).
+
+juce::String RunsProcessor::stateToJsonText()
+{
+    // Flush pending CC mirrors first so the payload carries the LAST held
+    // control value, exactly like the chunk write (S7).
+    applyPendingCcMirrors();
+
+    auto root = std::make_unique<juce::DynamicObject>();
+    root->setProperty ("format", "runs-assistant");
+    root->setProperty ("version", kClipboardJsonVersion);
+
+    auto params = std::make_unique<juce::DynamicObject>();
+    for (int i = 0; i < kNumParams; ++i)
+        params->setProperty (
+            kParamIds[i],
+            (double) ranged[i]->convertFrom0to1 (ranged[i]->getValue()));
+    root->setProperty ("params", juce::var (params.release()));
+
+    auto s = std::make_unique<juce::DynamicObject>();
+    s->setProperty ("engineSourceType", settings.engineSourceType);
+    s->setProperty ("engineNumber", settings.engineNumber);
+    juce::Array<juce::var> notes, pcs, bindings;
+    for (int k = 0; k < 3; ++k)
+    {
+        notes.add (settings.engineNoteNumbers[k]);
+        pcs.add (settings.enginePcNumbers[k]);
+    }
+    for (int b = 0; b < 8; ++b)
+        bindings.add (settings.boundCC[b]);
+    s->setProperty ("engineNoteNumbers", notes);
+    s->setProperty ("enginePcNumbers", pcs);
+    s->setProperty ("boundCC", bindings);
+    s->setProperty ("epsilonMs", (double) settings.epsilonMs);
+    s->setProperty ("gateFraction", (double) settings.gateFraction);
+    s->setProperty ("downWeight", (double) settings.downWeight);
+    s->setProperty ("midBarWeight", (double) settings.midBarWeight);
+    s->setProperty ("customOffsets", settings.customOffsets);
+    root->setProperty ("settings", juce::var (s.release()));
+
+    // Indented output: the text is meant to be human-readable when pasted
+    // into a plain-text editor. 6 decimals round-trips every float range.
+    return juce::JSON::toString (
+        juce::var (root.release()),
+        juce::JSON::FormatOptions().withMaxDecimalPlaces (6));
+}
+
+bool RunsProcessor::applyStateFromJsonText (const juce::String& text,
+                                            juce::String& error)
+{
+    error = {};
+    if (text.trim().isEmpty())
+    {
+        error = "clipboard empty";
+        return false;
+    }
+    const juce::var payload = juce::JSON::parse (text);
+    auto* root = payload.getDynamicObject();
+    if (root == nullptr)
+    {
+        error = "not valid JSON";
+        return false;
+    }
+    if (root->hasProperty ("format")
+        && root->getProperty ("format").toString() != "runs-assistant")
+    {
+        error = "not a Runs preset";
+        return false;
+    }
+    const juce::var verVar = root->getProperty ("version");
+    const int version = verVar.isVoid() ? 1 : (int) verVar;
+    if (version < 1 || version > kClipboardJsonVersion)
+    {
+        error = "unsupported version";
+        return false;
+    }
+    auto* params = root->getProperty ("params").getDynamicObject();
+    if (params == nullptr)
+    {
+        error = "no params section";
+        return false;
+    }
+
+    // Numeric field reader: absent keys keep `out`, wrong-typed keys fail.
+    auto isNumber = [] (const juce::var& v)
+    { return v.isInt() || v.isInt64() || v.isDouble() || v.isBool(); };
+    auto number = [&] (juce::DynamicObject* o, const char* key, double& out)
+    {
+        const juce::var v = o->getProperty (key);
+        if (v.isVoid())
+            return true;
+        if (! isNumber (v))
+            return false;
+        out = (double) v;
+        return true;
+    };
+    auto intArray = [&] (juce::DynamicObject* o, const char* key, int* dst,
+                         int n, bool noneAllowed)
+    {
+        const juce::var v = o->getProperty (key);
+        if (v.isVoid())
+            return true;
+        const auto* arr = v.getArray();
+        if (arr == nullptr || arr->size() < n)
+            return false;
+        for (int k = 0; k < n; ++k)
+        {
+            const juce::var e = arr->getUnchecked (k);
+            if (! isNumber (e))
+                return false;
+            const int x = (int) e;
+            dst[k] = noneAllowed ? (x >= 0 && x <= 127 ? x : kCcNone)
+                                 : juce::jlimit (0, 127, x);
+        }
+        return true;
+    };
+
+    // ---- parameters: start from the current values, override the present
+    // ones, then range-clamp exactly like the chunk reader (S7).
+    float values[kNumParams];
+    for (int i = 0; i < kNumParams; ++i)
+        values[i] = ranged[i]->convertFrom0to1 (ranged[i]->getValue());
+
+    int present = 0; // known parameter keys found in the payload
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        const juce::var v = params->getProperty (kParamIds[i]);
+        if (v.isVoid())
+            continue; // absent: keep the current value
+        if (! isNumber (v))
+        {
+            error = "bad value for " + juce::String (kParamIds[i]);
+            return false;
+        }
+        ++present;
+        const double d = (double) v;
+        if (paramIsDiscrete (i))
+            values[i] = (float) juce::jlimit ((int) realValueMinOf (i),
+                                              (int) realValueMaxOf (i),
+                                              (int) std::lround (d));
+        else
+            values[i] = juce::jlimit (realValueMinOf (i), realValueMaxOf (i),
+                                      (float) d);
+    }
+    if (present == 0)
+    {
+        error = "no params section";
+        return false;
+    }
+
+    // ---- settings (optional section): same clamps as the chunk reader.
+    runsp::PluginSettings s = settings;
+    auto* obj = root->getProperty ("settings").getDynamicObject();
+    if (obj != nullptr)
+    {
+        double v;
+        if (! number (obj, "engineSourceType", v = s.engineSourceType))
+        { error = "bad settings"; return false; }
+        s.engineSourceType = juce::jlimit (0, 2, (int) std::lround (v));
+        if (! number (obj, "engineNumber", v = s.engineNumber))
+        { error = "bad settings"; return false; }
+        s.engineNumber = clampByte ((int) std::lround (v));
+        if (! intArray (obj, "engineNoteNumbers", s.engineNoteNumbers, 3, false))
+        { error = "bad settings"; return false; }
+        if (! intArray (obj, "enginePcNumbers", s.enginePcNumbers, 3, false))
+        { error = "bad settings"; return false; }
+        if (! intArray (obj, "boundCC", s.boundCC, 8, true))
+        { error = "bad settings"; return false; }
+        if (! number (obj, "epsilonMs", v = s.epsilonMs))
+        { error = "bad settings"; return false; }
+        s.epsilonMs = (float) juce::jlimit (0.0, 100.0, v);
+        if (! number (obj, "gateFraction", v = s.gateFraction))
+        { error = "bad settings"; return false; }
+        s.gateFraction = (float) juce::jlimit (0.0, 1.0, v);
+        if (! number (obj, "downWeight", v = s.downWeight))
+        { error = "bad settings"; return false; }
+        s.downWeight = (float) juce::jlimit (0.0, 2.0, v);
+        if (! number (obj, "midBarWeight", v = s.midBarWeight))
+        { error = "bad settings"; return false; }
+        s.midBarWeight = (float) juce::jlimit (0.0, 2.0, v);
+        if (! number (obj, "customOffsets", v = (double) s.customOffsets))
+        { error = "bad settings"; return false; }
+        s.customOffsets = (uint16_t) ((int) std::lround (v) & 0x0FFF);
+    }
+
+    // ---- commit: settings first (a Custom-mode tick refresh reads the
+    // pasted mask), then every parameter through the normal notify path so
+    // attachments and the host see the edits (S7/S11). The engine switch
+    // goes through requestEngineState so the switch queue, the parameter and
+    // the GUI all follow the same path as a button click (S3.1).
+    settings = s;
+    for (int i = 0; i < kNumParams; ++i)
+        if (i != kEngineIndex)
+            ranged[i]->setValueNotifyingHost (
+                ranged[i]->convertTo0to1 (values[i]));
+    requestEngineState ((int) std::lround (values[kEngineIndex]));
+    markStateDirty(); // settings are chunk-only (S7)
+    return true;
 }
 
 // --------------------------------------------------------------------------

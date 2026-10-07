@@ -960,6 +960,23 @@ RunsEditor::RunsEditor (RunsProcessor& p)
             processor.apvts, "overlap", overlapButton);
 
     // ---- Bottom row (S9) -------------------------------------------------
+    copyButton.setName ("Copy to Clipboard");
+    copyButton.setTooltip (
+        "Copy the whole state - engine, scale (tonic, mode, ticks), Beats, "
+        "Density, Curve, Accent, Arc, Walk, Overlap and the settings - to "
+        "the system clipboard as JSON text.");
+    copyButton.onClick = [this] { copyToClipboard(); };
+    addAndMakeVisible (copyButton);
+
+    pasteButton.setName ("Paste from Clipboard");
+    pasteButton.setTooltip (
+        "Restore the state from Runs Assistant JSON text on the system "
+        "clipboard (as made by Copy to Clipboard). Out-of-range values are "
+        "clamped; text that is not a Runs Assistant preset is rejected and "
+        "changes nothing.");
+    pasteButton.onClick = [this] { pasteFromClipboard(); };
+    addAndMakeVisible (pasteButton);
+
     settingsButton.setTooltip (
         "Settings: engine switch source and event numbers, per-parameter CC "
         "bindings, tuning constants, reset to defaults.");
@@ -984,6 +1001,13 @@ RunsEditor::RunsEditor (RunsProcessor& p)
 
 void RunsEditor::timerCallback()
 {
+    // Clipboard button feedback (Copy/Paste flash) expires after ~1.2 s.
+    if (flashTicks > 0 && --flashTicks == 0 && flashedButton != nullptr)
+    {
+        flashedButton->setButtonText (flashedRestore);
+        flashedButton = nullptr;
+    }
+
     const int state = juce::jlimit (
         0, 2, processor.publishedEngineState.load (std::memory_order_relaxed));
     if (state != engineButtonState)
@@ -1066,20 +1090,66 @@ void RunsEditor::parameterChanged (const juce::String& paramID, float)
     if (paramID == "tonic" || paramID == "mode")
         refreshScaleTicks (false);
     if (paramID == "walk")
+        syncWalkRadios(); // mirror the radio pair from inbound CC/automation
+}
+
+// Fold has no attachment (the Zig-zag ButtonAttachment owns the parameter,
+// D13), so both radios are mirrored from the parameter here - by the APVTS
+// listener and again after a paste.
+void RunsEditor::syncWalkRadios()
+{
+    auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+        processor.apvts.getParameter ("walk"));
+    if (p == nullptr)
+        return;
+    const int idx = (int) std::lround (
+        juce::jlimit (0.0f, 1.0f, p->convertFrom0to1 (p->getValue())));
+    refreshGuard = true;
+    zigzagButton.setToggleState (idx == 1, juce::dontSendNotification);
+    foldButton.setToggleState (idx == 0, juce::dontSendNotification);
+    refreshGuard = false;
+}
+
+// Clipboard preset (S9): JSON text through the system clipboard. Both
+// actions run on the message thread (button onClick), so the JSON build,
+// the clipboard and the parameter writes are allowed here - the audio-thread
+// rules only govern processBlock.
+void RunsEditor::copyToClipboard()
+{
+    juce::SystemClipboard::copyTextToClipboard (processor.stateToJsonText());
+    flashButton (copyButton, "Copied");
+}
+
+void RunsEditor::pasteFromClipboard()
+{
+    juce::String error;
+    if (processor.applyStateFromJsonText (
+            juce::SystemClipboard::getTextFromClipboard(), error))
     {
-        // Mirror the radio pair from inbound CC/automation (D13).
-        auto* p = dynamic_cast<juce::RangedAudioParameter*> (
-            processor.apvts.getParameter ("walk"));
-        if (p != nullptr)
-        {
-            const int idx = (int) std::lround (
-                juce::jlimit (0.0f, 1.0f, p->convertFrom0to1 (p->getValue())));
-            refreshGuard = true;
-            zigzagButton.setToggleState (idx == 1, juce::dontSendNotification);
-            foldButton.setToggleState (idx == 0, juce::dontSendNotification);
-            refreshGuard = false;
-        }
+        // Re-derive the controls that have no attachment from the freshly
+        // applied state: the tick grid (D12) and the walk radio pair (D13).
+        refreshScaleTicks (false);
+        syncWalkRadios();
+        updateReadouts();
+        flashButton (pasteButton, "Pasted");
     }
+    else
+    {
+        flashButton (pasteButton, error.isEmpty() ? "Paste failed" : error);
+    }
+}
+
+// Transient label feedback instead of a message box (a plug-in UI never
+// steals focus with modal dialogs); the 20 Hz timer restores the label.
+void RunsEditor::flashButton (juce::TextButton& button, const juce::String& text)
+{
+    if (flashedButton != nullptr && flashedButton != &button)
+        flashedButton->setButtonText (flashedRestore);
+    if (flashedButton == nullptr)
+        flashedRestore = button.getButtonText();
+    flashedButton = &button;
+    flashTicks = 24; // 1.2 s at the 20 Hz timer
+    button.setButtonText (text);
 }
 
 void RunsEditor::pitchTickChanged (int pitchClass)
@@ -1269,10 +1339,12 @@ void RunsEditor::resized()
         area.removeFromTop (6);
     }
 
-    // Bottom row (S9): Debug overlay toggle only; the Settings button lives
-    // in the header centre now that the curve preview strip lives here.
+    // Bottom row (S9): clipboard preset buttons left, Debug overlay right;
+    // the Settings button lives in the header centre.
 
     auto bottom = area.removeFromTop (28);
+    copyButton.setBounds (bottom.removeFromLeft (150).reduced (2, 2));
+    pasteButton.setBounds (bottom.removeFromLeft (170).reduced (2, 2));
     debugToggle.setBounds (bottom.removeFromRight (140).reduced (2, 2));
 
     // RUNV footer (S7): persist the current editor window size.

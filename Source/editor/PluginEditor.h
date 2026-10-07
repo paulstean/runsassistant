@@ -17,7 +17,7 @@ class CurveView;
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
 //   curve strip: square curve shape preview below the walk row (S9)
-//   bottom row:  Debug overlay toggle (S9)
+//   bottom row:  Copy / Paste clipboard preset buttons + Debug overlay (S9)
 // Engine / scale / walk / overlap / slider state lives in the APVTS, so host
 // automation and bound-CC mirrors arrive through the attachments (S4/S11);
 // the processor observes an engine value change at block time and cuts the
@@ -60,6 +60,14 @@ private:
     void updateReadouts();
     void ensureDialog();
     void toggleOverlay (bool on);
+    // Clipboard preset (S9): JSON text <-> system clipboard
+    void copyToClipboard();
+    void pasteFromClipboard();
+    // Mirrors the walk radio pair from the parameter (Fold has no
+    // attachment; D13) - used by the APVTS listener and after a paste.
+    void syncWalkRadios();
+    // Transient button-label feedback for the clipboard actions
+    void flashButton (juce::TextButton& button, const juce::String& text);
 
     RunsProcessor& processor;
 
@@ -94,8 +102,15 @@ private:
         overlapAttachment;
 
     // Bottom row
+    juce::TextButton copyButton { "Copy to Clipboard" };
+    juce::TextButton pasteButton { "Paste from Clipboard" };
     juce::TextButton settingsButton { "Settings" };
     juce::ToggleButton debugToggle { "Debug overlay" };
+    // Clipboard feedback: the flashed button, its normal label and the
+    // remaining ticks of the 20 Hz restore timer.
+    juce::TextButton* flashedButton = nullptr;
+    juce::String flashedRestore;
+    int flashTicks = 0;
 
     // owned in the .cpp (defined types live there)
     std::unique_ptr<SettingsPanel> settingsPanel;

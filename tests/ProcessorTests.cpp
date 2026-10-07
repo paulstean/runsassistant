@@ -856,6 +856,75 @@ void testChunkV1BackwardCompatible()
     CHECK (paramReal (b, "overlap") == 0.0f); // v1 chunk: Overlap off (S7)
 }
 
+void testJsonClipboardRoundTrip()
+{
+    // S7/S9 clipboard preset: the JSON text carries the same payload as the
+    // RUN1 chunk (parameters as real values + settings), so a paste behaves
+    // like a project-state load.
+    RunsProcessor a;
+    tuneChunkDefaults (a);
+    const juce::String text = a.stateToJsonText();
+    CHECK (text.contains ("\"runs-assistant\""));
+    CHECK (text.contains ("\"customOffsets\""));
+    RunsProcessor b;
+    juce::String error;
+    CHECK (b.applyStateFromJsonText (text, error));
+    CHECK (error.isEmpty());
+    CHECK (chunkValuesRetained (a, b));
+    // A second round trip of the applied state is byte-for-byte identical.
+    CHECK (b.stateToJsonText() == text);
+}
+
+void testJsonClipboardRejected()
+{
+    // Foreign or malformed text must change nothing at all (S7-style
+    // reject-and-keep), and every rejection must carry a short reason the
+    // editor can flash on the button.
+    RunsProcessor p;
+    juce::String error;
+    const char* bad[] = {
+        "",                                                   // empty clipboard
+        "this is not json at all",                            // parse failure
+        "[{\"beats\":4}]",                                    // array root
+        "{\"format\":\"other-app\",\"params\":{}}",           // not ours
+        "{\"format\":\"runs-assistant\",\"version\":99,"
+            "\"params\":{}}",                                 // future schema
+        "{\"format\":\"runs-assistant\"}",                    // no params
+        "{\"format\":\"runs-assistant\",\"params\":{}}",      // no known key
+        "{\"format\":\"runs-assistant\",\"params\":"
+            "{\"beats\":\"loud\"}}",                          // wrong type
+        "{\"format\":\"runs-assistant\",\"params\":{\"beats\":4},"
+            "\"settings\":{\"boundCC\":\"x\"}}"               // bad settings
+    };
+    for (auto* t : bad)
+    {
+        const bool ok = p.applyStateFromJsonText (t, error);
+        CHECK (! ok);
+        CHECK (! error.isEmpty());
+    }
+    CHECK (allDefaults (p)); // rejected payloads never mutate the state
+}
+
+void testJsonClipboardPartialAndClamped()
+{
+    // Present fields are range-clamped like the chunk reader; absent fields
+    // (parameters and the whole settings section) keep their current values.
+    RunsProcessor p;
+    tuneChunkDefaults (p);
+    juce::String error;
+    CHECK (p.applyStateFromJsonText (
+        "{\"format\":\"runs-assistant\",\"version\":1,"
+        "\"params\":{\"beats\":99,\"curve\":-4.0,\"tonic\":7,"
+        "\"density\":99.0}}", error));
+    CHECK (error.isEmpty());
+    CHECK_EQ ((int) paramReal (p, "beats"), 16);      // clamped to 1..16
+    CHECK_NEAR (paramReal (p, "curve"), 0.0f, 1e-6);  // clamped to 0..1
+    CHECK_NEAR (paramReal (p, "density"), 16.0f, 1e-6);
+    CHECK_EQ ((int) paramReal (p, "tonic"), 7);       // in range: applied
+    CHECK_NEAR (paramReal (p, "accent"), 0.75f, 1e-4); // absent: untouched
+    CHECK (p.settings.engineNumber == 90);            // settings absent too
+}
+
 void testStateSavedFullyRoundTrip()
 {
     // Issue report: "check that the plugin state is being saved fully to the
@@ -1210,6 +1279,9 @@ int main()
     testChunkWrongMagicRejected();
     testChunkVersionRejected();
     testChunkV1BackwardCompatible();
+    testJsonClipboardRoundTrip();
+    testJsonClipboardRejected();
+    testJsonClipboardPartialAndClamped();
     testStateSavedFullyRoundTrip();
     testOverlapParamEmission();
     testEngineChainQueuePath();

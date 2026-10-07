@@ -424,6 +424,13 @@ the last held control values.
 No text preset files v1 (D15). Undo: none (D16). Reset to defaults action in
 Settings restores factory parameter values and CC bindings (not undoable in v1).
 
+The same payload can also be copied to and pasted from the system clipboard as
+JSON from the editor (section 9, Copy to Clipboard / Paste from Clipboard): it
+carries all parameters as real values plus the settings, and it only ever
+travels through the clipboard, never the file system (D15 still holds). Paste
+validates like the chunk reader (reject anything that is not ours, range-clamp
+every present field, keep absent fields), so a bad clipboard changes nothing.
+
 ---
 
 ## 8. Host parameters
@@ -453,7 +460,7 @@ No list, no playhead display.
 | Walk: ( ) Fold  (x) Zig-zag   Overlap: [x] On                              |
 | [ curve preview: smooth curve bottom-left to top-right (Up), mirrored for Down ] |
 +----------------------------------------------------------------------------+
-|                                                          [Debug overlay]   |
+| [Copy to Clipboard] [Paste from Clipboard]               [Debug overlay]   |
 +----------------------------------------------------------------------------+
 ```
 
@@ -492,6 +499,19 @@ No list, no playhead display.
   per-parameter CC bindings table with conflict prevention; tuning constants
   (alignment epsilon, gate fraction, downbeat weight, mid-bar beat weight);
   Reset to defaults.
+* **Copy to Clipboard / Paste from Clipboard:** bottom-row buttons that move the
+  whole state through the system clipboard as indented JSON text. The payload is
+  the chunk's data, keyed by parameter id: a `params` object with every
+  parameter as a real value (engine, beats, density, curve, accent, arc, tonic,
+  mode, walk, overlap) plus a `settings` object (engine source type and numbers,
+  the eight CC bindings, the four tuning constants, the custom tick set), wrapped
+  with `format: "runs-assistant"` and a schema `version`. Copy flushes pending
+  CC mirrors first, so the text carries the last held control values. Paste
+  accepts only its own format and schema version, applies through the normal
+  parameter-notify path (engine through the regular switch path), range-clamps
+  every present field like the chunk reader and keeps absent fields; anything
+  else is rejected without changing anything. Both actions give short
+  label feedback on the button (Copied / Pasted / reason), no dialogs.
 * **Debug overlay:** engine state, pending note (if any), active run progress
   (last emitted pitch/velocity, notes emitted / n), counters (parity drops,
   late-published singles, cuts), current playhead beat and bpm.
@@ -509,7 +529,8 @@ No list, no playhead display.
   velocity stack math + clamps, accent falloff at exact/half-beat distances,
    gate math, tail-end hold of the final note until trigger release,
    cut semantics (each condition of 5.6), zig-zag parity drop counter,
-  chunk round-trip + truncated rejection.
+  chunk round-trip + truncated rejection, clipboard JSON round-trip +
+  foreign/incompatible text rejection + clamp-on-paste.
 * Real-time gates: `pluginval` strict all formats; no-allocation instrumented
   processBlock run.
 * REAPER manual checklist (per build): engine on, pair triggers on the beat ->
@@ -518,7 +539,9 @@ No list, no playhead display.
   curve slider sweep audible (spacing sane); accent audible against a click;
   fff->ppp across the pair velocities; arc sweep; fold vs zig-zag audible on an
   over-dense run; cut on early release; loop wrap cuts; save/load round trip;
-  CC87 + CC88..95 remote control with GUI mirroring.
+  CC87 + CC88..95 remote control with GUI mirroring; Copy to Clipboard /
+  Paste from Clipboard restores the whole state (and clamps a hand-edited
+  value).
 * Acceptance for v1 is the REAPER pass plus CI green; other hosts compile-load
   tested only (best-effort).
 

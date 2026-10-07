@@ -146,6 +146,18 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Clipboard preset (S7/S9): the whole state - every parameter as a real
+    // value plus the settings - as JSON text, for the editor's Copy to
+    // Clipboard / Paste from Clipboard buttons. Same payload as the RUN1
+    // chunk, but the text only travels through the system clipboard: this is
+    // not a preset file (D15).
+    juce::String stateToJsonText();
+    // Applies text produced by stateToJsonText(). Returns false and fills
+    // `error` with a short reason when the payload is not ours; nothing is
+    // applied in that case. Present fields are range-clamped like the chunk
+    // reader, absent fields keep their current values.
+    bool applyStateFromJsonText (const juce::String& text, juce::String& error);
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
