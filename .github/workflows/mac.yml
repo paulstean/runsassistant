@@ -1,0 +1,46 @@
+# Runs Assistant - manual macOS universal build (VST3 / AU / CLAP / Standalone).
+# Runs only on demand: Actions tab -> "Mac Build (manual)" -> Run workflow,
+# or: gh workflow run mac.yml --ref main
+name: Mac Build (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Configure
+        run: cmake --preset mac-universal
+
+      - name: Build
+        run: cmake --build --preset mac-universal --parallel
+
+      - name: CTest
+        run: ctest --test-dir build/mac -C Release --output-on-failure
+
+      - name: Stage artefacts
+        shell: bash
+        run: |
+          mkdir -p bundle
+          for t in RunsAssistant RunsAssistantMFX; do
+            base="build/mac/${t}_artefacts/Release"
+            cp -R "$base/AU"            "bundle/${t}-AU" 2>/dev/null || true
+            cp -R "$base/VST3"          "bundle/${t}-VST3" 2>/dev/null || true
+            cp -R "$base/CLAP"          "bundle/${t}-CLAP" 2>/dev/null || true
+            cp -R "$base/Standalone"    "bundle/${t}-Standalone" 2>/dev/null || true
+          done
+          ls -R bundle
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RunsAssistant-mac-universal
+          path: bundle/
+          if-no-files-found: error
