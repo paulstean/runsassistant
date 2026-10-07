@@ -543,8 +543,10 @@ void engineSwitchCutTest_helper (int srcType)
         if (e.msg.isController())
             CHECK (e.msg.getControllerNumber() != 87);
     p.applyPendingCcMirrors();
-    // engine parameter mirrors the CC-driven state (S3.1/S11)
-    CHECK_EQ ((int) std::lround (p.apvts.getParameter ("engine")->getValue() * 2.0f), 0);
+    // The engine STATE reverts (audio thread truth); the host parameter is
+    // no longer written back by the plugin (echo loop guard) - assert on the
+    // published state instead (S3.1/S11).
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
 }
 
 void testEngineCcSwitchCut() { engineSwitchCutTest_helper (1); }

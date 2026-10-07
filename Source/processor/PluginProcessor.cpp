@@ -460,9 +460,9 @@ void RunsProcessor::emitLatePublish (int channel, int pitch, int velocity,
 
 void RunsProcessor::requestEngineState (int index)
 {
-    // S3.1 GUI three-state switch: queued directly; the parameter is
-    // mirrored back afterwards (doEngineChange -> mirror FIFO) so host
-    // automation and the UI stay consistent. The audio thread dedups.
+    // S3.1 GUI three-state switch: queued directly (bypasses the host
+    // parameter; the GUI mirrors the real state via the UI FIFO). The audio
+    // thread dedups identical states.
     if (index < 0 || index > 2)
         return;
     diagEngineListenerHits.store (
@@ -493,9 +493,11 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
     echoGraceBlocks.store (juce::jlimit (4, 480,
         (int) (0.5 * sampleRate_ / juce::jmax (1.0, (double) lastBlockSamples_))),
         std::memory_order_relaxed);
-    // GUI mirror of the engine state via the same dirty path as CC edits
-    // (S3.1/S11); the audio thread only enqueues.
-    mirrorFifo.push ({ kEngineIndex, (float) engineState_, true });
+    // NOTE: the engine parameter is intentionally NOT written back (no
+    // mirror push). REAPER echoes host-cached discrete-param values back on
+    // UI focus changes and the write->echo->flip loop made sw run away
+    // (sw:2998). The param now follows external writes only; the GUI mirrors
+    // the real engine state from the UI FIFO instead (S3.1/S11).
 }
 
 void RunsProcessor::mergeEmitAndFlushToHost (juce::MidiBuffer& midi)
@@ -960,6 +962,7 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         u.engineSwitches = diagEngineSwitches.load (std::memory_order_relaxed);
         u.engineListenerHits =
             diagEngineListenerHits.load (std::memory_order_relaxed);
+        publishedEngineState.store (engineState_, std::memory_order_relaxed);
         u.beat = blk.ppqPlaying ? blk.b0 : playhead.virtualBeat();
         u.bpm = blk.bpm;
         uiFifo.push (u); // full FIFO drops (overlay only refreshes later)

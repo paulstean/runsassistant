@@ -21,6 +21,7 @@ class DebugOverlayPanel;
 // observes an engine value change at block time and cuts the active run (S5.6).
 class RunsEditor : public juce::AudioProcessorEditor,
                    private juce::Slider::Listener,
+                   private juce::Timer,
                    private juce::AudioProcessorValueTreeState::Listener
 {
 public:
@@ -43,6 +44,9 @@ public:
 private:
     // juce::Slider::Listener: refresh the value readouts
     void sliderValueChanged (juce::Slider*) override;
+    // juce::Timer: mirrors the real engine state (audio->UI FIFO) onto the
+    // engine buttons (param echoes must not drive the visuals)
+    void timerCallback() override;
     // APVTS listener: tonic/mode changes (GUI combos, CC/automation, load)
     // re-tick the pitch-class grid (D12)
     void parameterChanged (const juce::String& paramID,
@@ -62,10 +66,7 @@ private:
     // Title row
     juce::Label title;
     juce::ToggleButton engineButtons[3];
-    std::unique_ptr<juce::ParameterAttachment> engineAttachment;
-    // Debug overlay engine-state mirror (host/CC writes must keep the
-    // buttons in sync even when the param value is overridden externally)
-    juce::ToggleButton* engineButtonsRef = nullptr;
+    int engineButtonState = -1; // mirrors publishedEngineState; -1 unsynced
 
     // Scale rows
     juce::Label tonicLabel, modeLabel;

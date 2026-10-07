@@ -667,38 +667,20 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         engineButtons[i].setTooltip (engTip[i]);
         addAndMakeVisible (engineButtons[i]);
     }
-    // Bound to the APVTS "engine" choice (S9): host automation + bound-CC
-    // mirrors arrive through the same parameter (last-writer-wins, S4).
-    // The processor detects a changed engine raw value at block time
-    // (syncLiveValues) and calls the P2 doEngineChange path, which flushes
-    // pending notes and cuts the active run - nothing more is needed here.
-    auto* engineParam = dynamic_cast<juce::RangedAudioParameter*> (
-        processor.apvts.getParameter ("engine"));
-    jassert (engineParam != nullptr);
-    engineAttachment = std::make_unique<juce::ParameterAttachment> (
-        *engineParam,
-        [this, engineParam] (float norm)
-        {
-            const int idx = juce::jlimit (
-                0, 2, (int) std::lround (engineParam->convertFrom0to1 (norm)));
-            for (int i = 0; i < 3; ++i)
-                engineButtons[i].setToggleState (
-                    i == idx, juce::dontSendNotification);
-        },
-        nullptr);
+    // The buttons DON'T bind to the APVTS parameter: REAPER echoes host-cached
+    // discrete-param values back on UI focus changes, and a gesture-driven
+    // edit ping-ponged the state. Clicks go directly into the processor's
+    // switch queue (requestEngineState); the visuals follow the REAL engine
+    // state from the audio thread (Timer below), not the parameter (S3.1).
     for (int i = 0; i < 3; ++i)
     {
         engineButtons[i].setName ("Engine " + juce::String (engTip[i][0]));
-        // Direct switch: queued on the processor, bypassing the parameter
-        // (REAPER echoes cached param values back on UI focus changes and
-        // would ping-pong a gesture-driven edit; S3.1/S11).
         engineButtons[i].onClick = [this, i] { processor.requestEngineState (i); };
     }
-    engineAttachment->sendInitialUpdate();
+    timerCallback(); // initial visual sync from the current engine state
 
     // ---- Scale rows (S9 / D12) ------------------------------------------
-    tonicLabel.setText ("Tonic", juce::dontSendNotification);
-    tonicLabel.setColour (juce::Label::textColourId, runui::text());
+    tonicLabel.setText ("Tonic", juce::dontSendNotification);    tonicLabel.setColour (juce::Label::textColourId, runui::text());
     addAndMakeVisible (tonicLabel);
     for (int i = 0; i < 12; ++i)
         tonicCombo.addItem (kPitchNames[i], i + 1);
@@ -857,6 +839,22 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     processor.getEditorWindowSize (w, h);
     setResizeLimits (720, 320, 1400, 600); // S9 resize limits
     setSize (juce::jlimit (720, 1400, w), juce::jlimit (320, 600, h));
+    startTimerHz (20); // engine-state mirror (host/CC writes included)
+}
+
+void RunsEditor::timerCallback()
+{
+    const int state = juce::jlimit (
+        0, 2, processor.publishedEngineState.load (std::memory_order_relaxed));
+    if (state != engineButtonState)
+    {
+        engineButtonState = state;
+        refreshGuard = true;
+        for (int i = 0; i < 3; ++i)
+            engineButtons[i].setToggleState (i == state,
+                                             juce::dontSendNotification);
+        refreshGuard = false;
+    }
 }
 
 RunsEditor::~RunsEditor()

@@ -5,7 +5,7 @@
 #   libs/clap-juce-extensions       main (pinned at scaffold time)
 # Fresh clone: git submodule update --init --recursive --depth 1
 cmake_minimum_required(VERSION 3.27)
-project(RunsAssistant VERSION 0.1.0 LANGUAGES C CXX)
+project(RunsAssistant VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

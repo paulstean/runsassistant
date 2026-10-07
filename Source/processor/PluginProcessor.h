@@ -274,6 +274,12 @@ private:
     std::atomic<int> inputDrops_ { 0 };
     std::atomic<long long> inputEventCount_ { 0 }; // diagnostics (overlay)
 
+public:
+    // Current engine state mirrored for UI sync (message thread reads it).
+    std::atomic<int> publishedEngineState { 0 };
+
+private:
+
     MidiScratchItem outScratch[kOutCap];
     int outCount = 0;
     std::atomic<int> outDrops_ { 0 };
