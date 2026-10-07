@@ -10,6 +10,7 @@
 class SettingsPanel;
 class DebugOverlayPanel;
 class CurveView;
+class MidiDragButton;
 
 // S9 panel (plan.md P3). Layout shell + dark theme + data-bound controls:
 //   title row:   title + Settings button + engine Off/Up/Down toggles
@@ -17,6 +18,7 @@ class CurveView;
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
 //   curve strip: square curve shape preview below the walk row (S9)
+//   export row:  Start / Target note dropdowns, their velocities, Drag MIDI
 //   bottom row:  Copy / Paste clipboard preset buttons + Debug overlay (S9)
 // Engine / scale / walk / overlap / slider state lives in the APVTS, so host
 // automation and bound-CC mirrors arrive through the attachments (S4/S11);
@@ -106,6 +108,19 @@ private:
     juce::TextButton pasteButton { "Paste from Clipboard" };
     juce::TextButton settingsButton { "Settings" };
     juce::ToggleButton debugToggle { "Debug overlay" };
+
+    // Offline export row (session-only: no APVTS, no chunk, dropped when the
+    // editor closes). Explicit run endpoints + the trigger velocities that
+    // feed the S5.3 base fade, then the drag affordance for the rendered .mid.
+    juce::Label fromLabel, targetLabel;
+    juce::ComboBox fromCombo, targetCombo;
+    ParamRow velFrom, velTo;
+    std::unique_ptr<MidiDragButton> dragButton;
+    int exportFrom = 60;   // C4
+    int exportTarget = 72; // C5
+    // Renders the export and returns its path (empty on failure, where the
+    // reason is flashed on the drag button instead).
+    juce::String prepareMidiDrag();
     // Clipboard feedback: the flashed button, its normal label and the
     // remaining ticks of the 20 Hz restore timer.
     juce::TextButton* flashedButton = nullptr;

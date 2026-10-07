@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 
 // --------------------------------------------------------------------------
 // Settings dialog content (S9): engine source type + event numbers,
@@ -722,6 +723,18 @@ namespace
 const char* kPitchNames[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G",
                                 "G#", "A", "A#", "B" };
 
+// Note name for the export endpoint dropdowns: C-1 (0) .. G9 (119); 60 = C4.
+juce::String noteName (int note)
+{
+    const int n = juce::jlimit (0, 127, note);
+    return juce::String (kPitchNames[n % 12]) + juce::String (n / 12 - 1);
+}
+
+// Export dropdown range: C1 .. C8 - everything a run realistically spans,
+// without an unusable 128-entry list.
+constexpr int kExportNoteLo = 24;
+constexpr int kExportNoteHi = 108;
+
 void styleParamRow (RunsEditor::ParamRow& row, const char* name,
                     const char* tooltipText, double lo, double hi,
                     double interval, double defaultValue)
@@ -739,6 +752,52 @@ void styleParamRow (RunsEditor::ParamRow& row, const char* name,
     row.readout.setJustificationType (juce::Justification::centredLeft);
 }
 } // namespace
+
+// Export affordance. Renders the .mid on mouse-down (message-thread file I/O
+// is allowed - the no-file-IO rule covers the audio thread only, S6.2) and
+// starts a NATIVE file drag as soon as the user actually drags off the
+// button: JUCE's external drag runs asynchronously on its own OLE thread and
+// only makes sense from an active mouse drag, so a plain click just flashes a
+// hint instead of flinging a file at whatever is under the cursor.
+class MidiDragButton : public juce::TextButton
+{
+public:
+    explicit MidiDragButton (const juce::String& name) : TextButton (name) {}
+
+    std::function<juce::String ()> prepareFile; // -> path; empty on failure
+    std::function<void ()> onPlainClick;
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragged = false;
+        file = prepareFile != nullptr ? prepareFile() : juce::String();
+        TextButton::mouseDown (e);
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragged && file.isNotEmpty() && e.getDistanceFromDragStart() > 6)
+        {
+            dragged = true;
+            juce::StringArray files;
+            files.add (file);
+            juce::DragAndDropContainer::performExternalDragDropOfFiles (
+                files, false, this);
+        }
+        TextButton::mouseDrag (e);
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (! dragged && file.isNotEmpty() && onPlainClick != nullptr)
+            onPlainClick(); // rendered fine, but never left the button
+        TextButton::mouseUp (e);
+    }
+
+private:
+    juce::String file;
+    bool dragged = false;
+};
 
 RunsEditor::RunsEditor (RunsProcessor& p)
     : AudioProcessorEditor (p), processor (p)
@@ -959,6 +1018,71 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
             processor.apvts, "overlap", overlapButton);
 
+    // ---- Offline export row (session-only) -------------------------------
+    // No attachments: the endpoints and their velocities live in the editor
+    // and are dropped with it (they are export inputs, not host state).
+    fromLabel.setText ("Start", juce::dontSendNotification);
+    fromLabel.setColour (juce::Label::textColourId, runui::text());
+    targetLabel.setText ("Target", juce::dontSendNotification);
+    targetLabel.setColour (juce::Label::textColourId, runui::text());
+    addAndMakeVisible (fromLabel);
+    addAndMakeVisible (targetLabel);
+
+    for (int n = kExportNoteLo; n <= kExportNoteHi; ++n)
+    {
+        fromCombo.addItem (noteName (n), n + 1);   // ComboBox ids start at 1
+        targetCombo.addItem (noteName (n), n + 1);
+    }
+    fromCombo.setSelectedId (exportFrom + 1, juce::dontSendNotification);
+    targetCombo.setSelectedId (exportTarget + 1, juce::dontSendNotification);
+    fromCombo.onChange = [this]
+    { exportFrom = juce::jlimit (0, 127, fromCombo.getSelectedId() - 1); };
+    targetCombo.onChange = [this]
+    { exportTarget = juce::jlimit (0, 127, targetCombo.getSelectedId() - 1); };
+    const juce::String endpointTip =
+        "export endpoint: the two notes the rendered run runs between. The "
+        "lower-to-higher order sets the run direction, and the Start note "
+        "also carries the run's first velocity. Both must fall on different "
+        "scale degrees or no run is produced.";
+    fromCombo.setTooltip ("Start note of the " + endpointTip);
+    targetCombo.setTooltip ("Target note of the " + endpointTip);
+    fromLabel.setTooltip (fromCombo.getTooltip());
+    targetLabel.setTooltip (targetCombo.getTooltip());
+    addAndMakeVisible (fromCombo);
+    addAndMakeVisible (targetCombo);
+
+    styleParamRow (velFrom, "v",
+                   "Velocity of the Start note: the exported run fades "
+                   "linearly between this and the Target velocity across its "
+                   "length, before Arc and Accent are applied.",
+                   1.0, 127.0, 1.0, 100.0);
+    styleParamRow (velTo, "v",
+                   "Velocity of the Target note: where the exported run's "
+                   "base velocity lands at the far end.",
+                   1.0, 127.0, 1.0, 90.0);
+    ParamRow* exportRows[2] = { &velFrom, &velTo };
+    for (auto* row : exportRows)
+    {
+        addAndMakeVisible (row->name);
+        addAndMakeVisible (row->slider);
+        addAndMakeVisible (row->readout);
+        row->slider.addListener (this);
+    }
+
+    dragButton = std::make_unique<MidiDragButton> ("Drag MIDI");
+    dragButton->setName ("Drag MIDI");
+    dragButton->setTooltip (
+        "Render the run as a MIDI file and drag it into the DAW's arrange "
+        "window: press, hold and drag off this button. The render uses every "
+        "current parameter and setting plus the Start/Target notes and their "
+        "velocities; the file lands at beat 0 with this tempo and time "
+        "signature. Not saved with the project.");
+    dragButton->prepareFile = [this] { return prepareMidiDrag(); };
+    dragButton->onPlainClick = [this]
+    { flashButton (*dragButton, "Drag me"); };
+    addAndMakeVisible (*dragButton);
+    updateReadouts();
+
     // ---- Bottom row (S9) -------------------------------------------------
     copyButton.setName ("Copy to Clipboard");
     copyButton.setTooltip (
@@ -992,10 +1116,12 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     addAndMakeVisible (debugToggle);
 
     // ---- Window geometry (S9 + RUNV footer, S7) --------------------------
+    // Min height grew with the offline export row (402 px of content + 16 px
+    // frame): old saved 390 px windows are clamped up by jlimit below.
     int w, h;
     processor.getEditorWindowSize (w, h);
-    setResizeLimits (720, 390, 1400, 600); // S9 resize limits
-    setSize (juce::jlimit (720, 1400, w), juce::jlimit (390, 600, h));
+    setResizeLimits (720, 420, 1400, 600); // S9 resize limits
+    setSize (juce::jlimit (720, 1400, w), juce::jlimit (420, 600, h));
     startTimerHz (20); // engine-state mirror (host/CC writes included)
 }
 
@@ -1139,6 +1265,23 @@ void RunsEditor::pasteFromClipboard()
     }
 }
 
+// Offline export: one full run for the chosen endpoints, written to a temp
+// .mid. Runs entirely on the message thread, so file I/O and the parameter
+// reads are allowed here (S6.2 governs processBlock only).
+juce::String RunsEditor::prepareMidiDrag()
+{
+    juce::String error;
+    const juce::File f = processor.renderMidiExport (
+        exportFrom, exportTarget, juce::roundToInt (velFrom.slider.getValue ()),
+        juce::roundToInt (velTo.slider.getValue ()), error);
+    if (f.getFullPathName().isEmpty())
+    {
+        flashButton (*dragButton, error.isEmpty() ? "Export failed" : error);
+        return {};
+    }
+    return f.getFullPathName();
+}
+
 // Transient label feedback instead of a message box (a plug-in UI never
 // steals focus with modal dialogs); the 20 Hz timer restores the label.
 void RunsEditor::flashButton (juce::TextButton& button, const juce::String& text)
@@ -1212,6 +1355,14 @@ void RunsEditor::updateReadouts()
     arc.readout.setText ((arcPct > 0 ? "+" : "") + juce::String (arcPct)
                              + "%",
                          juce::dontSendNotification);
+    velFrom.readout.setText (
+        juce::String (juce::roundToInt (
+            juce::jlimit (1.0, 127.0, velFrom.slider.getValue()))),
+        juce::dontSendNotification);
+    velTo.readout.setText (
+        juce::String (juce::roundToInt (
+            juce::jlimit (1.0, 127.0, velTo.slider.getValue()))),
+        juce::dontSendNotification);
 }
 
 void RunsEditor::ensureDialog()
@@ -1329,6 +1480,33 @@ void RunsEditor::resized()
     {
         auto cv = area.removeFromTop (100);
         curveView->setBounds (cv.removeFromLeft (100));
+    }
+    area.removeFromTop (8);
+
+    // Offline export row: Start / Target endpoints with their velocities,
+    // then the drag affordance. Fixed label/readout/button widths; the two
+    // combos and the two velocity sliders share what is left so the row
+    // still fits the 720 px minimum width.
+    {
+        auto r = area.removeFromTop (28);
+        const int fixed = 44 + 16 + 32 + 10 + 50 + 16 + 32 + 10 + 104;
+        const int slack = juce::jmax (0, r.getWidth() - fixed);
+        const int comboW = juce::jlimit (76, 140, slack / 5);
+        const int sliderW = juce::jmax (48, (slack - 2 * comboW) / 2);
+
+        fromLabel.setBounds (r.removeFromLeft (44));
+        fromCombo.setBounds (r.removeFromLeft (comboW));
+        velFrom.name.setBounds (r.removeFromLeft (16));
+        velFrom.slider.setBounds (r.removeFromLeft (sliderW));
+        velFrom.readout.setBounds (r.removeFromLeft (32));
+        r.removeFromLeft (10);
+        targetLabel.setBounds (r.removeFromLeft (50));
+        targetCombo.setBounds (r.removeFromLeft (comboW));
+        velTo.name.setBounds (r.removeFromLeft (16));
+        velTo.slider.setBounds (r.removeFromLeft (sliderW));
+        velTo.readout.setBounds (r.removeFromLeft (32));
+        r.removeFromLeft (10);
+        dragButton->setBounds (r);
     }
     area.removeFromTop (8);
 

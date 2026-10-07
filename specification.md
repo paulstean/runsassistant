@@ -350,7 +350,9 @@ as beat 1).
 
 Constants (settings-exposed raw values with defaults above): downbeat weight 1.0,
 mid-bar beat weight 0.75, falloff reaching zero at half a beat from the grid line.
-These are documented as v1 tunables, reviewed by ear in the REAPER test pass.
+These are documented as v1 tunables, reviewed by ear in the REAPER test pass. The
+engine applies these Settings values (they travel with the run's parameter block);
+they are not free-standing constants.
 
 ### 5.8 Emission details
 
@@ -444,7 +446,7 @@ Overlap (bool). Settings and CC bindings are chunk-only, never parameters.
 
 ## 9. UI specification
 
-Default window 960 x 420, resizable within 720 x 390 .. 1400 x 600, DPI-aware,
+Default window 960 x 420, resizable within 720 x 420 .. 1400 x 600, DPI-aware,
 dark theme (Eloquent palette). One graph: the curve shape preview (below).
 No list, no playhead display.
 
@@ -459,6 +461,7 @@ No list, no playhead display.
 | Curve   [==o-------] 22%   Accent [===o-----] 41%    Arc [==o-----] +15%    |
 | Walk: ( ) Fold  (x) Zig-zag   Overlap: [x] On                              |
 | [ curve preview: smooth curve bottom-left to top-right (Up), mirrored for Down ] |
+| Start [C4 v] v[======] 100   Target [C5 v] v[======] 90      [Drag MIDI]   |
 +----------------------------------------------------------------------------+
 | [Copy to Clipboard] [Paste from Clipboard]               [Debug overlay]   |
 +----------------------------------------------------------------------------+
@@ -495,6 +498,30 @@ No list, no playhead display.
   playhead cursor.
 * **Overlap toggle:** Off/On checkbox next to the walk radios (host parameter,
   saved in the chunk); see 5.8 for the emission rule.
+* **Export row (offline render, drag to the arrange window):** `Start` and
+  `Target` note dropdowns (C1..C8, defaults C4 / C5), one velocity slider each
+  (1..127, defaults 100 / 90) and a **Drag MIDI** button. All four inputs are
+  session-only: not host parameters, not CC-mapped, not written to the chunk or
+  the clipboard payload. The row renders ONE complete run from the current
+  parameter and settings state plus those inputs and hands a type-0 MIDI file
+  to the OS as a native file drag the user can drop into the arrange window:
+  * direction follows the endpoints (lower-to-higher = Up, higher-to-lower =
+    Down); the pair is ordered by pitch as in 3.2, and Start carries the run's
+    first velocity while Target carries its last;
+  * the file starts at beat 0, uses 480 ticks per quarter, carries tempo and
+    time-signature meta events from the current transport (120 bpm / 4-4 when
+    the host has reported neither) and a track name; the run anchors its own
+    bar lines at beat 0 (5.7 first-anchor rule) and skips grid alignment (5.1
+    virtual-clock rule), so a drop at a bar line puts the accents on bar lines;
+  * the held final note (5.6 tail-end steady) is closed by an explicit
+    note-off one beat after the run's last onset;
+  * events are written in non-decreasing beat order with the note-off leading
+    any same-beat note-on (5.8 / 6.1 ordering), including overlap runs;
+  * an equal pair, or any input the engine refuses, reports a short reason on
+    the button instead of rendering (no dialogs, no file).
+  Rendering is message-thread only; file I/O here is allowed (6.2 governs the
+  audio thread). Press-and-drag starts the native drag; a plain click only
+  flashes a hint.
 * **Settings dialog:** engine source type (Notes / CC / PC) + its event numbers;
   per-parameter CC bindings table with conflict prevention; tuning constants
   (alignment epsilon, gate fraction, downbeat weight, mid-bar beat weight);

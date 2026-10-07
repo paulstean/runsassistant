@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "../core/PairTracker.h"
 #include "../core/RunEngine.h"
@@ -158,6 +159,17 @@ public:
     // reader, absent fields keep their current values.
     bool applyStateFromJsonText (const juce::String& text, juce::String& error);
 
+    // Offline export (drag-to-DAW): renders ONE complete run for explicit
+    // start/target pitches + trigger velocities out of the CURRENT parameter
+    // and Settings state, writes it as a type-0 MIDI file in the temp folder
+    // and returns that file. Session-only by design: nothing here touches the
+    // audio thread, the host parameters or the chunk schema. Returns an
+    // invalid File and fills `error` (short, button-sized text) on failure.
+    // Defined in OfflineExport.cpp.
+    juce::File renderMidiExport (int startPitch, int targetPitch,
+                                 int velStart, int velTarget,
+                                 juce::String& error);
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
@@ -232,6 +244,12 @@ private:
     void collectInput (const juce::MidiBuffer& midi);
     void syncLiveValues();
     runsp::RunParams makeRunParams (const PlayheadAdapter::Block& blk) const;
+    // Offline export twin of makeRunParams: same mapping, but from the atomic
+    // raw parameters (message thread; live[] belongs to the audio thread) and
+    // without a playhead - the export run starts at beat 0 with the run's own
+    // bar origin (S5.1 virtual-clock rule, S5.7 first-anchor rule).
+    runsp::RunParams makeExportRunParams (double bpm, int barNumerator) const;
+    std::vector<runsp::RunEvent> exportEvents; // message-thread scratch only
     double samplesPerBeatFor (const PlayheadAdapter::Block& blk) const;
     double beatAtSample (const PlayheadAdapter::Block& blk, int sample) const;
     int sampleAtBeat (const PlayheadAdapter::Block& blk, double beat) const;

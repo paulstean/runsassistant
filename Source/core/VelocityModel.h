@@ -20,7 +20,9 @@ inline double accentFalloff (double beatDistance)
     return f > 0.0 ? f : 0.0;
 }
 
-// S5.7 beat weights (v1 tunables): downbeat 1.0, mid-bar beat 0.75.
+// S5.7 beat weights (v1 tunables): downbeat 1.0, mid-bar beat 0.75. These are
+// the RunParams defaults; the Settings values travel in RunParams (the engine
+// never reads Settings itself).
 constexpr double kDownbeatWeight = 1.0;
 constexpr double kMidBarWeight = 0.75;
 

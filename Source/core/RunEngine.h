@@ -68,6 +68,11 @@ struct RunParams
     // ADDITIVE (P2): S5.1 virtual-clock mode skips alignment (the trigger
     // defines beat 0); ppq mode aligns forward to the next integer beat.
     bool alignToGrid = true;
+    // S5.7 accent beat weights (Settings tunables, spec defaults). The engine
+    // uses them wherever it needs a bar-line / mid-bar weight, so a chunk
+    // edit changes both the live run and the offline export the same way.
+    double downWeight = kDownbeatWeight;
+    double midBarWeight = kMidBarWeight;
 };
 
 struct PairTrigger

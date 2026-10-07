@@ -1252,6 +1252,145 @@ void testEngineOffHandoffSwitchOffWithoutSecondNote()
     CHECK (r.out.back().msg.isNoteOff()
            && r.out.back().msg.getNoteNumber() == (juce::uint8) 60);
 }
+
+// S5.7: the Settings accent weights now reach the live engine (they were
+// stored, serialized and editable but the engine hard-coded its own values).
+// accent 1, arc 0, trigger velocities 50/50: with the spec defaults the two
+// bar-line notes are pushed and the interior ones lag; with both weights 0
+// the whole accent stack collapses to the plain base velocity.
+void testAccentWeightsReachEngine()
+{
+    // Fresh processor per render: a run stays active until it is cut, so a
+    // second trigger on the same instance would be ignored (S5.6).
+    auto runVels = [&] (float down, float mid)
+    {
+        RunsProcessor p;
+        p.prepareToPlay (44100.0, 2048);
+        setParam (p, "beats", 4.0f);
+        setParam (p, "density", 1.0f); // n = 4
+        setParam (p, "curve", 0.0f);
+        setParam (p, "accent", 1.0f);
+        setParam (p, "arc", 0.0f);
+        setParam (p, "walk", 0.0f);
+        setParam (p, "overlap", 0.0f);
+        setEngine (p, 1); // Up
+        p.settings.downWeight = down;
+        p.settings.midBarWeight = mid;
+
+        Runner r (p, 2048);
+        r.startAt (0.0);
+        r.run (bufferOf ({
+            { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 50) },
+            { 0, juce::MidiMessage::noteOn (1, 72, (juce::uint8) 50) },
+        }), 90);
+        std::vector<int> v;
+        for (const auto& e : r.out)
+            if (e.msg.isNoteOn())
+                v.push_back ((int) e.msg.getVelocity());
+        return v;
+    };
+
+    const std::vector<int> specDefaults = runVels (1.0f, 0.75f);
+    CHECK_EQ ((int) specDefaults.size(), 4);
+    CHECK_EQ (specDefaults[0], 100); // bar line: downbeat weight 1.0
+    CHECK_EQ (specDefaults[3], 100); // beat 4 is a bar line too
+    // The two mid-bar notes sit at 1/3 and 2/3 through a beat, so their
+    // accent lands on the same 62/63 rounding boundary - only assert the
+    // accent is actually there and well below the bar-line push.
+    CHECK (specDefaults[1] < 100 && specDefaults[1] >= 60);
+    CHECK (specDefaults[2] < 100 && specDefaults[2] >= 60);
+
+    const std::vector<int> muted = runVels (0.0f, 0.0f);
+    CHECK_EQ ((int) muted.size(), 4);
+    for (int v : muted)
+        CHECK_EQ (v, 50); // weights 0 -> no accent push anywhere
+}
+
+// Offline export (drag-to-DAW): explicit endpoints -> a type-0 MIDI file in
+// the temp folder, plus the refusal cases. No playhead, no chunk, no audio
+// thread: this is the message-thread path the Drag MIDI button drives.
+void testOfflineExportMidiFile()
+{
+    RunsProcessor p;
+    setParam (p, "beats", 4.0f);
+    setParam (p, "density", 4.0f); // n = round(4 x 4) = 16
+    setParam (p, "tonic", 0.0f);   // C
+    setParam (p, "mode", 0.0f);    // major
+    setParam (p, "curve", 0.0f);
+    setParam (p, "accent", 0.0f);  // base fade only: 100 -> 90 exactly
+    setParam (p, "arc", 0.0f);
+    setParam (p, "overlap", 0.0f);
+
+    juce::String err;
+    const juce::File f = p.renderMidiExport (60, 72, 100, 90, err);
+    CHECK (err.isEmpty());
+    CHECK (f.existsAsFile());
+    CHECK (f.getSize() > 0);
+
+    juce::FileInputStream in (f);
+    CHECK (in.openedOk());
+    juce::MidiFile mf;
+    CHECK (mf.readFrom (in));
+    CHECK_EQ (mf.getNumTracks(), 1);
+    CHECK_EQ ((int) mf.getTimeFormat(), 480); // division = ticks per quarter
+
+    const juce::MidiMessageSequence* tr = mf.getTrack (0);
+    CHECK (tr != nullptr);
+    if (tr == nullptr)
+        return;
+
+    int ons = 0, offs = 0, firstOn = -1, lastOn = -1;
+    int firstVel = -1, lastVel = -1;
+    long prevTick = -1;
+    bool sorted = true, sawTempo = false;
+    int sigNum = 0, sigDen = 0;
+    for (int i = 0; i < tr->getNumEvents(); ++i)
+    {
+        const juce::MidiMessage& m = tr->getEventPointer (i)->message;
+        const long tick = (long) m.getTimeStamp();
+        if (tick < prevTick) sorted = false;
+        prevTick = tick;
+        if (m.isNoteOn())
+        {
+            if (firstOn < 0)
+            {
+                firstOn = m.getNoteNumber();
+                firstVel = m.getVelocity();
+            }
+            lastOn = m.getNoteNumber();
+            lastVel = m.getVelocity();
+            ++ons;
+        }
+        else if (m.isNoteOff())
+        {
+            ++offs;
+        }
+        else if (m.isTempoMetaEvent())
+        {
+            sawTempo = true;
+        }
+        else if (m.isTimeSignatureMetaEvent())
+        {
+            m.getTimeSignatureInfo (sigNum, sigDen);
+        }
+    }
+    CHECK (sorted);
+    CHECK_EQ (ons, 16);
+    CHECK_EQ (offs, 16);
+    CHECK_EQ (firstOn, 60); // engine Up: starts on the lower endpoint
+    CHECK_EQ (lastOn, 72);
+    CHECK_EQ (firstVel, 100);
+    CHECK_EQ (lastVel, 90);
+    CHECK (sawTempo);
+    CHECK_EQ (sigNum, 4);
+    CHECK_EQ (sigDen, 4);
+
+    // Refusals: an equal pair never fires (S3.2) and must not leave a file.
+    juce::String errSame;
+    const juce::File same = p.renderMidiExport (60, 60, 100, 90, errSame);
+    CHECK (same.getFullPathName().isEmpty());
+    CHECK_EQ (errSame, juce::String ("Start = target"));
+}
 } // namespace
 
 int main()
@@ -1292,6 +1431,8 @@ int main()
     testEngineCcValueRanges();
     testEngineOffHandoffPairFiresAtSecondNoteOn();
     testEngineOffHandoffSwitchOffWithoutSecondNote();
+    testAccentWeightsReachEngine();
+    testOfflineExportMidiFile();
     std::printf ("%s (%d failures)\n",
                  failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

@@ -1324,6 +1324,10 @@ runsp::RunParams RunsProcessor::makeRunParams (
     p.hasBarOrigin = blk.hasBarOrigin; // S5.7 host bar origin when provided
     p.barOriginBeats = blk.barOrigin;
     p.alignToGrid = blk.ppqPlaying; // S5.1: virtual clock skips alignment
+    // S5.7 accent beat weights: the Settings tunables finally reach the
+    // engine (they used to be stored-but-ignored, engine hard-coded them).
+    p.downWeight = juce::jlimit (0.0, 2.0, (double) settings.downWeight);
+    p.midBarWeight = juce::jlimit (0.0, 2.0, (double) settings.midBarWeight);
     return p;
 }
 

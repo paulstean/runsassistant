@@ -40,6 +40,7 @@ endif ()
 set(RUNS_SOURCES
     Source/processor/PluginProcessor.h
     Source/processor/PluginProcessor.cpp
+    Source/processor/OfflineExport.cpp
     Source/processor/PlayheadAdapter.h
     Source/processor/PlayheadAdapter.cpp
     Source/editor/PluginEditor.h
@@ -59,7 +60,9 @@ set(RUNS_CORE_SOURCES
     Source/core/VelocityModel.h
     Source/core/VelocityModel.cpp
     Source/core/RunEngine.h
-    Source/core/RunEngine.cpp)
+    Source/core/RunEngine.cpp
+    Source/core/OfflineRun.h
+    Source/core/OfflineRun.cpp)
 
 juce_add_plugin(RunsAssistant
     COMPANY_NAME "Runs Community"
@@ -171,6 +174,7 @@ if (RUNS_BUILD_TESTS)
         tests/CoreTests.cpp
         tests/EngineTests.cpp
         tests/SweepTests.cpp
+        tests/OfflineRenderTests.cpp
         ${RUNS_CORE_SOURCES})
     target_include_directories(CoreTests PRIVATE tests Source)
     add_test(NAME CoreTests COMMAND CoreTests)

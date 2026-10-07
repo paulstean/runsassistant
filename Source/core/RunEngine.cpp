@@ -10,18 +10,20 @@ namespace
 {
 constexpr double kBeatEps = 1e-9; // float-comparison guard (S6.2 house rule)
 
-inline double weightForBeat (double fromBarOrigin, int barNumerator)
+inline double weightForBeat (double fromBarOrigin, int barNumerator,
+                             double downWeight, double midBarWeight)
 {
-    // S5.7: weight = 1.0 on a bar line, 0.75 otherwise. Bar lines are
+    // S5.7: weight = downbeat weight on a bar line, mid-bar weight otherwise
+    // (spec defaults 1.0 / 0.75; both are Settings tunables). Bar lines are
     // fromBarOrigin %% timeSigNumerator == 0; the caller supplies the beat
     // distance from the bar origin and the time-signature numerator; 0 or
-    // absent numerator disables bar detection.
-    if (barNumerator <= 0) return runsp::kMidBarWeight;
+    // absent numerator disables bar detection (mid-bar weight applies).
+    if (barNumerator <= 0) return midBarWeight;
     const long long b = (long long) std::floor (fromBarOrigin + kBeatEps);
     return (((b % (long long) barNumerator) + (long long) barNumerator)
                 % (long long) barNumerator) == 0
-               ? runsp::kDownbeatWeight
-               : runsp::kMidBarWeight;
+               ? downWeight
+               : midBarWeight;
 }
 } // namespace
 
@@ -130,7 +132,8 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
         const double f = absBeat - std::floor (absBeat);
         const double d = f < 0.5 ? f : 1.0 - f;
         const double falloff = accentFalloff (d);
-        const double w = weightForBeat (absBeat - barOrigin, p.barNumerator);
+        const double w = weightForBeat (absBeat - barOrigin, p.barNumerator,
+                                        p.downWeight, p.midBarWeight);
         pitches_[i] = (uint8_t) walkOut[i];
         vels_[i] = (uint8_t) computeVelocity (vStart, vEnd,
             count_ > 1 ? (double) i / (dn - 1.0) : 0.0,
