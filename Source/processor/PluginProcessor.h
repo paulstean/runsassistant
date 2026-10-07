@@ -239,10 +239,13 @@ private:
 
     juce::RangedAudioParameter* ranged[kNumParams] = {};         // GUI order
     std::atomic<float>* rawParam[kNumParams] = {};
-    // live[] S4 defaults (last slot = Overlap off; S5.8)
-    float live[kNumParams]   = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
-    float normSeen[kNumParams] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
-                                   -1.0f, -1.0f, -1.0f, -1.0f };
+    // live[] starts at the raw defaults until the ctor copies them from the
+    // APVTS (S4). normSeen must never coincide with a legal first value, so
+    // ALL slots start at -1 (a zero-init here masked the overlap bool's
+    // first change in the live[] sync and pinned runs to the old default).
+    float live[kNumParams]       = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
+    float normSeen[kNumParams]   = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                                     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
 
     double sampleRate_ = 48000.0;
     int lastBlockSamples_ = 512;

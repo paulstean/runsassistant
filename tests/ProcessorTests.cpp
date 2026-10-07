@@ -217,21 +217,28 @@ bool hasCcAt (const std::vector<Ev>& v, int block, int sample, int cc)
 int channelOf (const Ev& e) { return e.msg.getChannel(); }
 
 // The standard matrix setup: engine Up, density 2 (n = 8), curve 0 (linear
-// spacing), accent 0 (flat velocities), 2048-sample blocks at 44.1 kHz.
+// spacing), accent 0 (flat velocities), plus the factory defaults that are
+// not under test pinned the way the matrix was written (Fold walk, no
+// legato overlap), 2048-sample blocks at 44.1 kHz.
 void setUpMatrix (RunsProcessor& p)
 {
     p.prepareToPlay (44100.0, 2048);
     setParam (p, "density", 2.0f);
     setParam (p, "curve", 0.0f);
     setParam (p, "accent", 0.0f);
+    setParam (p, "arc", 0.0f);
+    setParam (p, "walk", 0.0f);
+    setParam (p, "overlap", 0.0f);
     setEngine (p, 1);
 }
 
 void testPairMatrixEngineOff()
 {
-    // (a) engine Off: the pair passes through untouched (S3.3).
+    // (a) engine Off: the pair passes through untouched (S3.3). Factory
+    // default is Up (S4), so force Off for this test.
     RunsProcessor p;
     p.prepareToPlay (44100.0, 2048);
+    setEngine (p, 0);
     Runner r (p, 2048);
     r.run (bufferOf ({
         { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
@@ -646,15 +653,17 @@ void testCcMappingAndAbsorption()
     p.applyPendingCcMirrors();
     CHECK_EQ (paramReal (p, "density"), before);
 
-    // engine Off: bound CCs pass through inertly (S3.3)
+    // engine Off: bound CCs pass through inertly (S3.3) - factory default is
+    // Up (S4), so force Off for the inert check.
     RunsProcessor p2;
     p2.prepareToPlay (44100.0, 2048);
+    setEngine (p2, 0);
     Runner r2 (p2, 2048);
     r2.run (bufferOf ({
         { 3, juce::MidiMessage::controllerEvent (1, 89, 64) },
     }), 0);
     CHECK (hasCcAt (r2.out, 0, 3, 89));
-    CHECK_NEAR (paramReal (p2, "density"), 4.0f, 1e-4);
+    CHECK_NEAR (paramReal (p2, "density"), 5.0f, 1e-4);
 
     // walk 63 -> Fold (D13)
     RunsProcessor p3;
@@ -731,7 +740,7 @@ bool allDefaults (const RunsProcessor& p)
     const char* ids[RunsProcessor::kNumParams] = { "engine", "beats", "density",
         "curve", "accent", "arc", "tonic", "mode", "walk", "overlap" };
     const float defaults[RunsProcessor::kNumParams] =
-        { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
+        { 1, 4, 5, 0.22f, 0.41f, 0.15f, 0, 0, 1, 1 };
     bool ok = true;
     for (int i = 0; i < RunsProcessor::kNumParams; ++i)
     {
@@ -952,7 +961,8 @@ void testEngineChainParamPath()
         RunsProcessor p;
         p.prepareToPlay (44100.0, 2048);
         Runner r (p, 2048);
-        stepN (p, r, 1); // settle: raw-atomics cache filled at defaults
+        stepN (p, r, 60); // settle: raw-atomics cache at defaults + the
+                          // default-Up switch's echo grace window expires
         setEngine (p, state);
         stepN (p, r, 2);
         CHECK_EQ ((int) p.publishedEngineState.load(), state);
@@ -1068,11 +1078,16 @@ void testEngineCcValueRanges()
 
 void engineOffHandoffSetup (RunsProcessor& p)
 {
-    // engine still Off (boots Off, no setEngine); matrix-like tuning.
+    // engine forced Off (the factory default is Up, S4) and the non-matrix
+    // defaults pinned the way this handoff matrix was written (Fold walk, no
+    // legato overlap).
     p.prepareToPlay (44100.0, 2048);
     setParam (p, "density", 2.0f);
     setParam (p, "curve", 0.0f);
     setParam (p, "accent", 0.0f);
+    setParam (p, "walk", 0.0f);
+    setParam (p, "overlap", 0.0f);
+    setEngine (p, 0);
 }
 
 void testEngineOffHandoffPairFiresAtSecondNoteOn()

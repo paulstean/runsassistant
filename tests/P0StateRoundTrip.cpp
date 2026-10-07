@@ -1,6 +1,7 @@
 // P0 headless gate (plan.md P0): parameter defaults/ranges, state
 // round-trip, MIDI passthrough invariance with the engine Off.
 #include "../Source/processor/PluginProcessor.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -21,19 +22,27 @@ void testDefaults()
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (v);
         CHECK (ranged != nullptr);
         if (ranged != nullptr)
-            CHECK (juce::approximatelyEqual (
-                ranged->convertFrom0to1 (ranged->getDefaultValue()), wantRaw));
+        {
+            const float got = ranged->convertFrom0to1 (
+                ranged->getDefaultValue());
+            // 0.1..0.2 style defaults may be 1 ulp off after the
+            // normalized-range round trip; compare with a small tolerance.
+            if (std::abs (got - wantRaw) >= 1e-6f)
+                std::printf ("FAIL detail: %s got %f want %f\n", id, got,
+                             wantRaw);
+            CHECK (std::abs (got - wantRaw) < 1e-6f);
+        }
     };
-    equal ("engine", 0.0f);
+    equal ("engine", 1.0f);
     equal ("beats", 4.0f);
-    equal ("density", 4.0f);
-    equal ("curve", 0.5f);
-    equal ("accent", 0.5f);
-    equal ("arc", 0.0f);
+    equal ("density", 5.0f);
+    equal ("curve", 0.22f);
+    equal ("accent", 0.41f);
+    equal ("arc", 0.15f);
     equal ("tonic", 0.0f);
     equal ("mode", 0.0f);
-    equal ("walk", 0.0f);
-    equal ("overlap", 0.0f);
+    equal ("walk", 1.0f);
+    equal ("overlap", 1.0f);
 }
 
 void testStateRoundTrip()
@@ -58,10 +67,14 @@ void testPassthrough()
     RunsProcessor p;
     p.prepareToPlay (48000.0, 512);
 
-    // Engine stays Off (CC20 is not the engine CC and not bound), so P2 must
-    // still give byte-identical passthrough (S3.3). The old P0 packet used
-    // CC87 itself, which is now the engine switch (S3.1) and would change the
-    // engine state mid-block.
+    // The factory default engine is Up (S4); force Off for this test so P2
+    // must still give byte-identical passthrough (S3.3). The old P0 packet
+    // used CC87 itself, which is now the engine switch (S3.1) and would
+    // change the engine state mid-block.
+    auto* engine = dynamic_cast<juce::RangedAudioParameter*> (
+        p.apvts.getParameter ("engine"));
+    CHECK (engine != nullptr);
+    engine->setValueNotifyingHost (engine->convertTo0to1 (0.0f));
     juce::MidiBuffer in;
     in.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
     in.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 90), 17);

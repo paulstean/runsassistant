@@ -145,16 +145,16 @@ bindings are inert.
 
 | # | Parameter | Range | Default | Default CC |
 |---|---|---|---|---|
-| 1 | Engine switch | Off / Up / Down | Off | 87 (source-defined, see 3.1) |
+| 1 | Engine switch | Off / Up / Down | Up | 87 (source-defined, see 3.1) |
 | 2 | Beats (run length) | 1..16, integer | 4 | 88 |
-| 3 | Density | 1..16 notes/beat, continuous | 4 | 89 |
-| 4 | Curve strength | 0..100 percent | 50 | 90 |
-| 5 | Accent strength | 0..100 percent | 50 | 91 |
-| 6 | Arc | -100..+100 percent | 0 | 92 |
+| 3 | Density | 1..16 notes/beat, continuous | 5 | 89 |
+| 4 | Curve strength | 0..100 percent | 22 | 90 |
+| 5 | Accent strength | 0..100 percent | 41 | 91 |
+| 6 | Arc | -100..+100 percent | +15 | 92 |
 | 7 | Tonic | C..B (12 steps) | C | 93 |
 | 8 | Mode | index into mode list | Major | 94 |
-| 9 | Walk mode | Fold / Zig-zag | Fold | 95 |
-| 10 | Note overlap | Off / On | Off | none (not CC-mappable in v1) |
+| 9 | Walk mode | Fold / Zig-zag | Zig-zag | 95 |
+| 10 | Note overlap | Off / On | On | none (not CC-mappable in v1) |
 
 CC value mapping for continuous parameters: linear scale CC 0..127 to the parameter
 range. Tonic: floor(CC x 12 / 128). Mode: floor(CC x nmodes / 128). Walk: 0..63 =

@@ -151,21 +151,21 @@ RunsProcessor::createParameterLayout()
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "engine", 1 }, "Engine",
-        juce::StringArray { "Off", "Up", "Down" }, 0));
+        juce::StringArray { "Off", "Up", "Down" }, 1));
     layout.add (std::make_unique<juce::AudioParameterInt> (
         juce::ParameterID { "beats", 1 }, "Beats", 1, 16, 4));
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "density", 1 }, "Density",
-        juce::NormalisableRange<float> (1.0f, 16.0f, 0.0f, 1.0f), 4.0f));
+        juce::NormalisableRange<float> (1.0f, 16.0f, 0.0f, 1.0f), 5.0f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "curve", 1 }, "Curve",
-        juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
+        juce::NormalisableRange<float> (0.0f, 1.0f), 0.22f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "accent", 1 }, "Accent",
-        juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
+        juce::NormalisableRange<float> (0.0f, 1.0f), 0.41f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "arc", 1 }, "Arc",
-        juce::NormalisableRange<float> (-1.0f, 1.0f), 0.0f));
+        juce::NormalisableRange<float> (-1.0f, 1.0f), 0.15f));
     layout.add (std::make_unique<juce::AudioParameterInt> (
         juce::ParameterID { "tonic", 1 }, "Tonic", 0, 11, 0,
         juce::AudioParameterIntAttributes()
@@ -178,9 +178,9 @@ RunsProcessor::createParameterLayout()
                 [] (int v, int) { return modeName (v); })));
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "walk", 1 }, "Walk",
-        juce::StringArray { "Fold", "Zig-zag" }, 0));
+        juce::StringArray { "Fold", "Zig-zag" }, 1));
     layout.add (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { "overlap", 1 }, "Overlap", false,
+        juce::ParameterID { "overlap", 1 }, "Overlap", true,
         juce::AudioParameterBoolAttributes()
             .withStringFromValueFunction (
                 [] (bool v, int) { return juce::String (v ? "On" : "Off"); })));

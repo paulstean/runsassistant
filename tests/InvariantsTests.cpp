@@ -408,17 +408,17 @@ public:
     MirrorClock clock;
     std::vector<RunRecord> runs;
 
-    int engineState = 0;
+    int engineState = 1; // S4 factory default: Up
     int grace = 0;
     int pendingParamEngine = -1;
     std::vector<int> engineQueue;
     long long cuts = 0;
     long long parityDrops = 0;
 
-    float liveBeats = 4.0f, liveDensity = 4.0f, liveCurve = 0.5f;
-    float liveAccent = 0.5f, liveArc = 0.0f;
-    float liveTonic = 0.0f, liveMode = 0.0f, liveWalk = 0.0f;
-    float liveOverlap = 0.0f;
+    float liveBeats = 4.0f, liveDensity = 5.0f, liveCurve = 0.22f;
+    float liveAccent = 0.41f, liveArc = 0.15f;
+    float liveTonic = 0.0f, liveMode = 0.0f, liveWalk = 1.0f;
+    float liveOverlap = 1.0f;
     uint16_t customOffsets = 0x0AB5;
 
     int prepareBlockSamples = 512;
@@ -1193,10 +1193,20 @@ void runSession (unsigned long long seed, bool engineOnScenario)
     }
     proc.prepareToPlay (sr, blockSize);
 
+    // Engine-Off scenarios need the engine actually Off; the factory default
+    // is Up (S4), so force the parameter before the first block.
+    if (! engineOnScenario)
+    {
+        auto* ep = proc.apvts.getParameter ("engine");
+        ep->setValueNotifyingHost (ep->convertTo0to1 (0.0f));
+    }
+
     MirrorSession M;
     M.sampleRate = sr;
     M.clock.sampleRate = sr;
     M.prepareBlockSamples = blockSize;
+    if (! engineOnScenario)
+        M.engineState = 0; // mirror the forced Off state (factory is Up)
     M.engineSourceType = proc.settings.engineSourceType;
     M.engineNumber = proc.settings.engineNumber;
     for (int k = 0; k < 3; ++k)
