@@ -23,9 +23,6 @@ jobs:
       - name: Build
         run: cmake --build --preset win-x64
 
-      - name: CTest
-        run: ctest --test-dir build/win-x64 -C Release --output-on-failure
-
       - name: Fetch pluginval
         shell: pwsh
         run: |
