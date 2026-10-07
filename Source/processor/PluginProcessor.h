@@ -60,6 +60,9 @@ struct UiMessage
     int inputDrops = 0;         // input scratch overflows (S6.1 step 2)
     long long inputEvents = 0;  // cumulative input events seen (diagnostics)
     int mirrorDrops = 0;        // CC-mirror FIFO overflows (S11)
+    int engineParamX256 = 0;    // diagnostics: engine param seen by audio
+    int engineParamChanges = 0; // diagnostics: param-change detections
+    int engineSwitches = 0;     // diagnostics: engine state transitions
     double beat = 0.0;          // current playhead beat / virtual beat (S9)
     double bpm = 120.0;
 };
@@ -145,6 +148,9 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
+    // APVTS listener object (defined in the .cpp) that enqueues engine
+    // switches from any message-thread param change into engineQueue.
+    std::unique_ptr<juce::AudioProcessorValueTreeState::Listener> apvtsListener;
 
     // S7 settings: editor/settings dialog (P3) and chunk I/O own this; the
     // audio thread only reads it.
@@ -228,6 +234,18 @@ private:
     // Engine state
     int engineState_ = 0;                 // 0 Off / 1 Up / 2 Down (S3.1)
     bool engineParamChanged = false;      // raw engine param changed this block
+
+    // Belt-and-braces engine switch path: APVTS listener enqueue (message
+    // thread) -> drain at block start (audio thread, before pass 1, D14).
+    // Cuts/flushes use the same doEngineChange path; doEngineChange dedups.
+    runsp::SpscRing<int, 16> engineQueue;
+
+    // Diagnostics (S9 overlay): last engine param value the audio thread
+    // saw, the number of param-change detections and queue events.
+    std::atomic<int> diagEngineParamX256 { 0 };
+    std::atomic<int> diagEngineParamChanges { 0 };
+    std::atomic<int> diagEngineSwitches { 0 };
+
     runsp::PairTracker pairs;
     runsp::RunEngine engine;
 
@@ -256,4 +274,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RunsProcessor)
 };
 
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+    juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();

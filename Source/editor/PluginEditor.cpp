@@ -531,7 +531,12 @@ private:
                                + "   pending note: "
                                + (s.pendingPitch >= 0
                                       ? juce::String (s.pendingPitch)
-                                      : "-"),
+                                      : "-")
+                               + "   [param "
+                               + juce::String (s.engineParamX256 / 256.0, 2)
+                               + " det:" + juce::String (s.engineParamChanges)
+                               + " sw:" + juce::String (s.engineSwitches)
+                               + "]",
                            juce::dontSendNotification);
         labels[1].setText (
             "run: " + (s.runActive ? juce::String (s.notesEmitted) + " / "

@@ -99,10 +99,39 @@ RunsProcessor::RunsProcessor()
     runSink.data = runSinkData;
     runSink.cap = kOutCap;
     runSink.count = 0;
+
+    // Belt-and-braces engine switch path (see engineQueue comment): any
+    // message-thread change of the "engine" parameter (GUI click, bound-CC
+    // mirror, host automation) enqueues the new switch state; processBlock
+    // drains the queue before pass 1 (D14 ordering).
+    struct EngineParamListener
+        : juce::AudioProcessorValueTreeState::Listener
+    {
+        explicit EngineParamListener (RunsProcessor& p) : owner (p) {}
+        void parameterChanged (const juce::String& paramID, float) override
+        {
+            if (paramID != "engine")
+                return;
+            if (auto* p = owner.ranged[kEngineIndex])
+            {
+                auto* raw = owner.rawParam[kEngineIndex];
+                const float plain = raw != nullptr
+                                        ? raw->load (std::memory_order_relaxed)
+                                        : p->convertFrom0to1 (p->getValue());
+                owner.engineQueue.push (
+                    (int) std::lround (juce::jlimit (0.0f, 2.0f, plain)));
+            }
+        }
+        RunsProcessor& owner;
+    };
+    apvtsListener = std::make_unique<EngineParamListener> (*this);
+    apvts.addParameterListener ("engine", apvtsListener.get());
 }
 
 RunsProcessor::~RunsProcessor()
 {
+    apvts.removeParameterListener ("engine", apvtsListener.get());
+    apvtsListener.reset();
     stopTimer();
 }
 
@@ -215,7 +244,12 @@ void RunsProcessor::syncLiveValues()
             normSeen[i] = norm;
             live[i] = ranged[i]->convertFrom0to1 (norm);
             if (i == kEngineIndex)
+            {
                 engineParamChanged = true;
+                diagEngineParamChanges.store (
+                    diagEngineParamChanges.load (std::memory_order_relaxed) + 1,
+                    std::memory_order_relaxed);
+            }
         }
     }
 }
@@ -434,6 +468,8 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
                          outs[k].a.velocity, sampleOffset);
     pairs.resetAll();
     engineState_ = newState;
+    diagEngineSwitches.store (diagEngineSwitches.load (std::memory_order_relaxed)
+                              + 1, std::memory_order_relaxed);
     // GUI mirror of the engine state via the same dirty path as CC edits
     // (S3.1/S11); the audio thread only enqueues.
     mirrorFifo.push ({ kEngineIndex, (float) engineState_, true });
@@ -620,6 +656,17 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         juce::jlimit (0.0f, 2.0f, live[0]));
     if (engineParamChanged && guiEngine != engineState_)
         doEngineChange (guiEngine, 0, blk.b0);
+
+    // Queue path first drain (S6.1 step 3 precedence): the listener enqueued
+    // from any message-thread engine edit; doEngineChange dedups equal states.
+    {
+        int q;
+        while (engineQueue.pop (q))
+        {
+            if (q >= 0 && q <= 2 && q != engineState_)
+                doEngineChange (q, 0, blk.b0);
+        }
+    }
     int engineCurrent = engineState_;
 
     const double samplesPerBeat = samplesPerBeatFor (blk);
@@ -877,6 +924,11 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         u.inputDrops = inputDrops_.load (std::memory_order_relaxed);
         u.inputEvents = inputEventCount_.load (std::memory_order_relaxed);
         u.mirrorDrops = mirrorFifo.dropped.load (std::memory_order_relaxed);
+        u.engineParamX256 = (int) std::lround (
+            juce::jlimit (0.0f, 2.0f, live[0]) * 256.0f);
+        u.engineParamChanges =
+            diagEngineParamChanges.load (std::memory_order_relaxed);
+        u.engineSwitches = diagEngineSwitches.load (std::memory_order_relaxed);
         u.beat = blk.ppqPlaying ? blk.b0 : playhead.virtualBeat();
         u.bpm = blk.bpm;
         uiFifo.push (u); // full FIFO drops (overlay only refreshes later)
