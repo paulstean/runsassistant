@@ -63,6 +63,9 @@ private:
     juce::Label title;
     juce::ToggleButton engineButtons[3];
     std::unique_ptr<juce::ParameterAttachment> engineAttachment;
+    // Debug overlay engine-state mirror (host/CC writes must keep the
+    // buttons in sync even when the param value is overridden externally)
+    juce::ToggleButton* engineButtonsRef = nullptr;
 
     // Scale rows
     juce::Label tonicLabel, modeLabel;

@@ -532,8 +532,12 @@ private:
                                + (s.pendingPitch >= 0
                                       ? juce::String (s.pendingPitch)
                                       : "-")
-                               + "   [param "
-                               + juce::String (s.engineParamX256 / 256.0, 2)
+                               + "   [L:"
+                               + juce::String (s.engineListenerHits)
+                               + " P:"
+                               + juce::String (msgParamNorm(), 3)
+                               + " A:"
+                               + juce::String (s.engineParamX256 / 256.0, 3)
                                + " det:" + juce::String (s.engineParamChanges)
                                + " sw:" + juce::String (s.engineSwitches)
                                + "]",
@@ -568,6 +572,16 @@ private:
     static int engNameIndex (const runsp::UiMessage& s)
     {
         return juce::jlimit (0, 2, s.engineState);
+    }
+
+    float msgParamNorm() const
+    {
+        // Divider probe: the message-thread view of the engine parameter
+        // (overlay Timer runs on the message thread).
+        if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+                processor.apvts.getParameter ("engine")))
+            return p->getValue();
+        return -1.0f;
     }
 
     void appendSpikeLog (const runsp::UiMessage& s)
@@ -621,7 +635,14 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
     // ---- Title + engine row (S9) ----------------------------------------
-    title.setText ("RUNS ASSISTANT", juce::dontSendNotification);
+    title.setText ("RUNS ASSISTANT v"
+#if defined (JucePlugin_VersionString)
+                       + juce::String (JucePlugin_VersionString)
+#else
+                       + juce::String (0.1) + " (test)"
+#endif
+                   ,
+                   juce::dontSendNotification);
     title.setColour (juce::Label::textColourId, runui::accent());
     title.setJustificationType (juce::Justification::centredLeft);
     title.setFont (runui::font (15.0f));

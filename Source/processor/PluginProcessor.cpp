@@ -112,6 +112,10 @@ RunsProcessor::RunsProcessor()
         {
             if (paramID != "engine")
                 return;
+            owner.diagEngineListenerHits.store (
+                owner.diagEngineListenerHits.load (std::memory_order_relaxed)
+                    + 1,
+                std::memory_order_relaxed);
             if (auto* p = owner.ranged[kEngineIndex])
             {
                 auto* raw = owner.rawParam[kEngineIndex];
@@ -929,6 +933,8 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         u.engineParamChanges =
             diagEngineParamChanges.load (std::memory_order_relaxed);
         u.engineSwitches = diagEngineSwitches.load (std::memory_order_relaxed);
+        u.engineListenerHits =
+            diagEngineListenerHits.load (std::memory_order_relaxed);
         u.beat = blk.ppqPlaying ? blk.b0 : playhead.virtualBeat();
         u.bpm = blk.bpm;
         uiFifo.push (u); // full FIFO drops (overlay only refreshes later)

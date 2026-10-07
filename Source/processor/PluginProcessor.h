@@ -63,6 +63,7 @@ struct UiMessage
     int engineParamX256 = 0;    // diagnostics: engine param seen by audio
     int engineParamChanges = 0; // diagnostics: param-change detections
     int engineSwitches = 0;     // diagnostics: engine state transitions
+    int engineListenerHits = 0; // diagnostics: APVTS listener hits
     double beat = 0.0;          // current playhead beat / virtual beat (S9)
     double bpm = 120.0;
 };
@@ -245,6 +246,7 @@ private:
     std::atomic<int> diagEngineParamX256 { 0 };
     std::atomic<int> diagEngineParamChanges { 0 };
     std::atomic<int> diagEngineSwitches { 0 };
+    std::atomic<int> diagEngineListenerHits { 0 }; // APVTS listener fires
 
     runsp::PairTracker pairs;
     runsp::RunEngine engine;
