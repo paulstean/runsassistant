@@ -58,6 +58,7 @@ struct UiMessage
     int latePublishes = 0;      // jabbed lone notes (S5.2)
     int cuts = 0;               // runs cut (S5.6)
     int inputDrops = 0;         // input scratch overflows (S6.1 step 2)
+    long long inputEvents = 0;  // cumulative input events seen (diagnostics)
     int mirrorDrops = 0;        // CC-mirror FIFO overflows (S11)
     double beat = 0.0;          // current playhead beat / virtual beat (S9)
     double bpm = 120.0;
@@ -236,6 +237,7 @@ private:
     bool inConsumed[kInputCap] = {};
     int inCount = 0;
     std::atomic<int> inputDrops_ { 0 };
+    std::atomic<long long> inputEventCount_ { 0 }; // diagnostics (overlay)
 
     MidiScratchItem outScratch[kOutCap];
     int outCount = 0;

@@ -548,9 +548,10 @@ private:
                                + juce::String (s.latePublishes)
                                + "   cuts: " + juce::String (s.cuts),
                            juce::dontSendNotification);
-        labels[3].setText ("input drops: " + juce::String (s.inputDrops)
-                               + "   mirror drops: "
-                               + juce::String (s.mirrorDrops),
+        labels[3].setText ("input events: " + juce::String ((int) s.inputEvents)
+                               + "  (drops " + juce::String (s.inputDrops)
+                               + ", mirror drops "
+                               + juce::String (s.mirrorDrops) + ")",
                            juce::dontSendNotification);
         labels[4].setText ("beat: " + juce::String (s.beat, 3) + "   bpm: "
                                + juce::String (s.bpm, 2),

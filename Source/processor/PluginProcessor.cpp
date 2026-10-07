@@ -203,7 +203,13 @@ void RunsProcessor::syncLiveValues()
     engineParamChanged = false;
     for (int i = 0; i < kNumParams; ++i)
     {
-        const float norm = ranged[i]->getValue();
+        // Audio-thread-safe read: getValue() is not thread-safe; the APVTS
+        // raw parameter is an atomic mirror (it stores the PLAIN value, so
+        // re-normalize before comparing with the seen[] cache).
+        float norm = ranged[i]->getValue();
+        if (rawParam[i] != nullptr)
+            norm = ranged[i]->convertTo0to1 (
+                rawParam[i]->load (std::memory_order_relaxed));
         if (norm != normSeen[i])
         {
             normSeen[i] = norm;
@@ -324,6 +330,9 @@ void RunsProcessor::collectInput (const juce::MidiBuffer& midi)
 {
     // S6.1 step 2: stable stream order; overflow drops with a counter.
     inCount = 0;
+    inputEventCount_.store (inputEventCount_.load (std::memory_order_relaxed)
+                                + (long long) (int) midi.getNumEvents(),
+                            std::memory_order_relaxed);
     for (const auto& e : midi)
     {
         if (inCount >= kInputCap
@@ -866,6 +875,7 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         u.lastVel = ctr.lastVel;
         u.latePublishes = pairs.latePublishes();
         u.inputDrops = inputDrops_.load (std::memory_order_relaxed);
+        u.inputEvents = inputEventCount_.load (std::memory_order_relaxed);
         u.mirrorDrops = mirrorFifo.dropped.load (std::memory_order_relaxed);
         u.beat = blk.ppqPlaying ? blk.b0 : playhead.virtualBeat();
         u.bpm = blk.bpm;
