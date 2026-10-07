@@ -281,12 +281,13 @@ struct MirrorClock
 
 inline double curveFormula (double p, double curveStrength)
 {
+    // S5.5 as revised (S13.11): inverted power-S exponent (slow, quick, slow).
     if (p <= 0.0) return 0.0;
     if (p >= 1.0) return 1.0;
     if (curveStrength <= 0.0) return p;
-    const double k = 1.0 + 9.0 * curveStrength;
+    const double e = 1.0 - 0.9 * curveStrength;
     const double r = (1.0 - p) / p;
-    return 1.0 / (1.0 + std::pow (r, k));
+    return 1.0 / (1.0 + std::pow (r, e));
 }
 
 inline int velocityFormula (double vStart, double vEnd, double pIdx,
@@ -317,6 +318,7 @@ struct MirrorParams
     int mode = 0;
     uint16_t customOffsets = 0x0AB5;
     bool zigzag = false;
+    bool overlap = false; // S5.8 overlap toggle
     double gateFrac = 0.6;
     double epsilonBeats = 0.0;
     int barNumerator = 4;
@@ -396,6 +398,7 @@ struct RunRecord
     int snappedLo = -1, snappedHi = -1;
     std::vector<double> relOnsets;
     std::vector<int> pitches, vels;
+    bool overlap = false; // S5.8 gate mode for the mirror pump
 };
 
 class MirrorSession
@@ -415,6 +418,7 @@ public:
     float liveBeats = 4.0f, liveDensity = 4.0f, liveCurve = 0.5f;
     float liveAccent = 0.5f, liveArc = 0.0f;
     float liveTonic = 0.0f, liveMode = 0.0f, liveWalk = 0.0f;
+    float liveOverlap = 0.0f;
     uint16_t customOffsets = 0x0AB5;
 
     int prepareBlockSamples = 512;
@@ -440,6 +444,15 @@ public:
     int liveNextOn = 0;
     std::vector<char> liveOffSent;
     long long jabLates = 0;
+
+    // Engine-off handoff (S3.3), mirror of RunsProcessor::offHandoff.
+    struct OffNote
+    {
+        int pitch = -1, vel = 0;
+        double beat = 0.0;
+        bool held = false;
+    };
+    OffNote offHandoff[16];
 
     double beatOfSample (int sample) const
     {
@@ -473,6 +486,7 @@ public:
         p.mode = (int) std::lround (juce::jlimit (0.0f, 16.0f, liveMode));
         p.customOffsets = customOffsets;
         p.zigzag = liveWalk >= 0.5f;
+        p.overlap = liveOverlap > 0.5f;
         p.gateFrac = 0.6;                       // settings untouched
         p.epsilonBeats = 2.0 * 0.001 * clock.bpm / 60.0; // 2 ms in beats
         p.barNumerator = tsNum;                 // stub time signature (S5.7)
@@ -506,6 +520,7 @@ public:
     void doChange (int newState, int sampleOffset, int cutSample)
     {
         if (newState < 0 || newState > 2 || newState == engineState) return;
+        const bool turningOn = engineState == 0; // handoff seed (S3.3)
         cutRunAt (cutSample);
         runsp::PairOutcome outs[16];
         int flushed = 0;
@@ -525,6 +540,17 @@ public:
         }
         pairs.clearAll();
         engineState = newState;
+        if (turningOn)
+        {
+            for (int c = 0; c < 16; ++c)
+            {
+                if (offHandoff[c].held)
+                    pairs.seedPassedPending (c, offHandoff[c].pitch,
+                                             offHandoff[c].vel,
+                                             offHandoff[c].beat);
+                offHandoff[c] = {};
+            }
+        }
         grace = juce::jlimit (4, 480, (int) (0.5 * sampleRate
                                             / (double) std::max (
                                                 1, prepareBlockSamples)));
@@ -541,10 +567,17 @@ public:
             {
                 if (liveOffSent[(size_t) j]) continue;
                 if (j == r.count - 1) continue; // tail-end steady (S5.6)
-                const double tOff = r.startBeat + r.relOnsets[(size_t) j]
-                                    + r.gateFrac
-                                          * (r.relOnsets[(size_t) j + 1]
-                                             - r.relOnsets[(size_t) j]);
+                // Exact replica of RunEngine::offBeatOf (S5.8): classic gate
+                // vs overlap (next onset + clamped fraction of the following
+                // gap; own gap for the last interior note).
+                const double relOn = r.relOnsets[(size_t) j];
+                const double nextOn = r.relOnsets[(size_t) j + 1];
+                const double relOff = r.overlap
+                    ? nextOn + r.gateFrac * ((j + 2 < r.count)
+                        ? (r.relOnsets[(size_t) j + 2] - nextOn)
+                        : (nextOn - relOn))
+                    : relOn + r.gateFrac * (nextOn - relOn);
+                const double tOff = r.startBeat + relOff;
                 if (tOff <= deadline + 1e-9)
                 {
                     MirrorEv e;
@@ -640,6 +673,7 @@ public:
         rec.customOffsets = p.customOffsets;
         rec.vStart = dirUp ? o.velLo : o.velHi;
         rec.vEnd = dirUp ? o.velHi : o.velLo;
+        rec.overlap = p.overlap;
 
         for (int i = 0; i < rec.count; ++i)
         {
@@ -759,8 +793,9 @@ public:
                     case 4: liveAccent = ps.second; break;
                     case 5: liveArc = ps.second; break;
                     case 6: liveTonic = ps.second; break;
-                    case 7: liveMode = ps.second; break;
-                    case 8: liveWalk = ps.second; break;
+                case 7: liveMode = ps.second; break;
+                case 8: liveWalk = ps.second; break;
+                case 9: liveOverlap = ps.second > 0.5f ? 1.0f : 0.0f; break;
                     default: break;
                 }
             }
@@ -831,7 +866,8 @@ public:
                 {
                     isEngineEvent = true;
                     const int v = m.getControllerValue();
-                    if (v <= 2) newState = v;
+                    // S3.1/D13 ranges (single definition in the processor):
+                    newState = RunsProcessor::engineStateFromCcValue (v);
                 }
             }
             else if (m.isProgramChange())
@@ -882,6 +918,34 @@ public:
                 expect.push_back (e);
             };
 
+            if (m.isNoteOn() && ! engineOn)
+            {
+                // S3.3 passthrough + engine-off handoff latch (mirror of the
+                // processor's offHandoff tracking).
+                const int ci = chIdx;
+                if (ci >= 0 && ci < 16)
+                {
+                    offHandoff[ci].pitch = m.getNoteNumber();
+                    offHandoff[ci].vel = m.getVelocity();
+                    offHandoff[ci].beat = beatOfSample (sample);
+                    offHandoff[ci].held = true;
+                }
+                pushRaw();
+                continue;
+            }
+
+            if (m.isNoteOff() && ! engineOn)
+            {
+                const int ci = chIdx;
+                if (ci >= 0 && ci < 16)
+                {
+                    OffNote& oh = offHandoff[ci];
+                    if (oh.held && oh.pitch == m.getNoteNumber()) oh = OffNote();
+                }
+                pushRaw();
+                continue;
+            }
+
             if (engineOn && m.isNoteOn())
             {
                 const double beat = beatOfSample (sample);
@@ -896,10 +960,15 @@ public:
                     case runsp::PairOutcome::PublishAndPass:
                     {
                         // S5.2: pending published; new note passes through.
-                        int pendSample = sample;
-                        if (o.pendingBeat >= curB0)
-                            pendSample = conv (o.pendingBeat);
-                        pb (true, o.a.pitch, o.a.velocity, pendSample);
+                        // Handoff (S3.3): a passed-through pending already
+                        // sounded and is not re-articulated.
+                        if (o.pendPassedSide == -1)
+                        {
+                            int pendSample = sample;
+                            if (o.pendingBeat >= curB0)
+                                pendSample = conv (o.pendingBeat);
+                            pb (true, o.a.pitch, o.a.velocity, pendSample);
+                        }
                         pb (true, m.getNoteNumber(), m.getVelocity(), sample);
                         break;
                     }
@@ -915,11 +984,18 @@ public:
                         if (runActive())
                         {
                             // one-run rule: consumption compensated by late
-                            // publishes of both notes (S5.6/S13.8)
-                            pb (true, o.pitchLo, o.velLo, sample);
-                            pb (false, o.pitchLo, o.velLo, sample);
-                            pb (true, o.pitchHi, o.velHi, sample);
-                            pb (false, o.pitchHi, o.velHi, sample);
+                            // publishes of both notes (S5.6/S13.8); the
+                            // passed-through handoff side skips (S3.3)
+                            if (o.pendPassedSide != 0)
+                            {
+                                pb (true, o.pitchLo, o.velLo, sample);
+                                pb (false, o.pitchLo, o.velLo, sample);
+                            }
+                            if (o.pendPassedSide != 1)
+                            {
+                                pb (true, o.pitchHi, o.velHi, sample);
+                                pb (false, o.pitchHi, o.velHi, sample);
+                            }
                         }
                         else if (startRun (o, beat, dir))
                         {
@@ -927,11 +1003,18 @@ public:
                         }
                         else
                         {
-                            // degenerate after snapping (S13.8)
-                            pb (true, o.pitchLo, o.velLo, sample);
-                            pb (false, o.pitchLo, o.velLo, sample);
-                            pb (true, o.pitchHi, o.velHi, sample);
-                            pb (false, o.pitchHi, o.velHi, sample);
+                            // degenerate after snapping (S13.8); passed side
+                            // skipped (S3.3 handoff)
+                            if (o.pendPassedSide != 0)
+                            {
+                                pb (true, o.pitchLo, o.velLo, sample);
+                                pb (false, o.pitchLo, o.velLo, sample);
+                            }
+                            if (o.pendPassedSide != 1)
+                            {
+                                pb (true, o.pitchHi, o.velHi, sample);
+                                pb (false, o.pitchHi, o.velHi, sample);
+                            }
                         }
                         break;
                     }
@@ -1287,9 +1370,10 @@ void runSession (unsigned long long seed, bool engineOnScenario)
                      && blkIdx > jabActiveUntil
                      && ! switchInjectedThisBlock) // engine CC traffic
             {
-                const int v = rng.chance (0.8) ? rng.irange (0, 2)
-                                               : rng.irange (3, 127);
-                if (v <= 2) switchInjectedThisBlock = true;
+                // S3.1/D13 ranges: every CC87 value selects a state now
+                // (0-40 Off, 41-79 Up, 80-127 Down); no no-op values remain.
+                const int v = rng.irange (0, 127);
+                switchInjectedThisBlock = true;
                 add (mkCC (sample, 1, M.engineNumber, v));
             }
             else if (r < 74 && engineOnScenario
@@ -1348,9 +1432,9 @@ void runSession (unsigned long long seed, bool engineOnScenario)
         // parameter edits (never the engine param here)
         if (rng.chance (0.08))
         {
-            static const char* ids[8] = { "beats", "density", "curve",
-                "accent", "arc", "tonic", "mode", "walk" };
-            const int which = rng.irange (0, 7);
+            static const char* ids[9] = { "beats", "density", "curve",
+                "accent", "arc", "tonic", "mode", "walk", "overlap" };
+            const int which = rng.irange (0, 8);
             float v = 0.0f;
             switch (which)
             {
@@ -1362,6 +1446,7 @@ void runSession (unsigned long long seed, bool engineOnScenario)
                 case 5: v = (float) rng.irange (0, 11); break;
                 case 6: v = (float) rng.irange (0, 16); break;
                 case 7: v = (float) rng.irange (0, 1); break;
+                case 8: v = rng.chance (0.5) ? 1.0f : 0.0f; break;
             }
             auto* e = proc.apvts.getParameter (ids[which]);
             e->setValueNotifyingHost (e->convertTo0to1 (v));

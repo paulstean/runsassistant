@@ -187,14 +187,23 @@ public:
     };
     PlayheadSnapshot playheadSnapshot;
 
-    static constexpr int kNumParams = 9;
+    static constexpr int kNumParams = 10;
     static constexpr int kEngineIndex = 0;
+    static constexpr int kOverlapIndex = 9; // S5.8 overlap toggle
 
     // S4 parameter real-value ranges shared by the CC mapping (D13) and the
     // chunk clamps (S7).
     static float realValueMinOf (int paramIndex);
     static float realValueMaxOf (int paramIndex);
     static bool  paramIsDiscrete  (int paramIndex);
+
+    // S3.1/D13 engine CC value ranges (single definition; the tests mirror
+    // it): 0-40 = Off, 41-79 = Up, 80-127 = Down.
+    static int engineStateFromCcValue (int value);
+
+    // S7: mark the host state dirty (VST3 dirty flag / CLAP state-mark-dirty
+    // through the non-parameter-changed path) for chunk-only edits.
+    void markStateDirty();
 
 private:
     // ---- preallocated scratch (prepareToPlay; fixed capacity, S6.2) -------
@@ -230,7 +239,8 @@ private:
 
     juce::RangedAudioParameter* ranged[kNumParams] = {};         // GUI order
     std::atomic<float>* rawParam[kNumParams] = {};
-    float live[kNumParams]   = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0 }; // S4 defaults
+    // live[] S4 defaults (last slot = Overlap off; S5.8)
+    float live[kNumParams]   = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
     float normSeen[kNumParams] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                                    -1.0f, -1.0f, -1.0f, -1.0f };
 
@@ -262,6 +272,18 @@ private:
     // automation still applies once the window passes. GUI switches bypass
     // the param entirely (engineQueue), so they always win.
     std::atomic<int> echoGraceBlocks { 0 };
+
+    // Engine-off handoff (S3.3): per channel, the last note-on that passed
+    // through while the engine was Off and is still held. Turning the engine
+    // to Up/Down seeds it as the channel's pending note, so a second note-on
+    // starts the run (S5.2 pair mechanics with a handoff-latched pending).
+    struct OffHandoffNote
+    {
+        int pitch = -1, vel = 0;
+        double beat = 0.0;
+        bool held = false;
+    };
+    OffHandoffNote offHandoff[16];
 
     runsp::PairTracker pairs;
     runsp::RunEngine engine;

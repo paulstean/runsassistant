@@ -61,6 +61,25 @@ TEST_CASE (curve_symmetric)
         }
 }
 
+TEST_CASE (curve_slow_quick_slow_direction)
+{
+    // S5.5 (revised, S13.11): strength > 0 widens the onset spacing at both
+    // rims and rushes the middle (slow, quick, slow). For a uniform note
+    // index, the first quarter of the run must span MORE time than linear
+    // and the symmetric end quarter spans less of its rim distance:
+    // y(p) > p for p < 0.5 and y(p) < p for p > 0.5.
+    for (double s : { 0.05, 0.2, 0.5, 0.9, 1.0 })
+    {
+        CHECK (curveMap (0.1, s) > 0.1);
+        CHECK (curveMap (0.25, s) > 0.25);
+        CHECK (curveMap (0.75, s) < 0.75);
+        CHECK (curveMap (0.9, s) < 0.9);
+        // strength increases -> stronger S in the same direction
+        CHECK (curveMap (0.25, 1.0) > curveMap (0.25, 0.2));
+        CHECK (curveMap (0.75, 1.0) < curveMap (0.75, 0.2));
+    }
+}
+
 // ---------------------------------------------------------------- ScaleModel
 
 TEST_CASE (scale_tables_match_processor_list)

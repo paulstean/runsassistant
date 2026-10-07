@@ -28,14 +28,17 @@ tools/make-release.ps1  versioned zip packer (out/, gitignored)
 ## Dev loop
 
 Building does NOT deploy: REAPER loads its installed copies, never the
-files under `build/`. After `cmake --build --preset win-x64`, close REAPER
-first (a loaded plug-in locks its binary), then:
+files under `build/`. ALWAYS deploy after building (standing instruction):
+after `ctest` is green, run
 
 `pwsh tools/deploy.ps1`
 
 which copies the fresh CLAP into `%LOCALAPPDATA%\Programs\Common\CLAP\`
 and merges the VST3 bundle into `%COMMONPROGRAMFILES%\VST3\` (merge, do
-not nest). Reopen REAPER and re-add the plug-in.
+not nest). Reopen REAPER and re-add the plug-in. If REAPER is running, the
+deploy aborts (a loaded plug-in locks its binary). Never kill REAPER
+without the user's permission; ask, then stop `reaper.exe` and re-run
+deploy.
 
 ## Conventions
 

@@ -33,6 +33,7 @@ void testDefaults()
     equal ("tonic", 0.0f);
     equal ("mode", 0.0f);
     equal ("walk", 0.0f);
+    equal ("overlap", 0.0f);
 }
 
 void testStateRoundTrip()

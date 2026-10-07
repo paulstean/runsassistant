@@ -27,10 +27,29 @@ inline double weightForBeat (double fromBarOrigin, int barNumerator)
 
 double RunEngine::gateOf (int i) const
 {
-    // S5.8: gate = fraction x gap to the next onset, interior notes only;
-    // the final note has no gate (tail-end steady, S5.6).
+    // S5.8: interior notes only; the final note has no gate (tail-end
+    // steady, S5.6). Returns the gate in beats, overlap mode included.
     if (! active_ || i < 0 || i >= count_ - 1) return 0.0;
-    return gate_* (onsets_[i + 1] - onsets_[i]);
+    return offBeatOf (i) - onsets_[i];
+}
+
+double RunEngine::offBeatOf (int i) const
+{
+    // Interior notes only. Classic gate (S5.8): fraction of the gap to the
+    // next onset. Overlap toggle (S5.8): held until slightly past the next
+    // note-on - overhang = clamped gate fraction of the FOLLOWING gap (own
+    // gap for the last interior note, which has no following gap), keeping
+    // the off strictly before the note-on after that; folds can revisit a
+    // pitch two steps apart, so the off must never cross onsets_[i + 2].
+    if (overlapFrac_ > 0.0)
+    {
+        const double nextOnset = onsets_[i + 1];
+        const double refGap = (i + 2 < count_)
+            ? onsets_[i + 2] - nextOnset
+            : nextOnset - onsets_[i];
+        return nextOnset + overlapFrac_ * refGap;
+    }
+    return onsets_[i] + gate_ * (onsets_[i + 1] - onsets_[i]);
 }
 
 bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
@@ -100,6 +119,11 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
     const double vEnd   = dirUp ? (double) t.velHi : (double) t.velLo;
     gate_ = p.gateFraction < 0.0 ? 0.0
             : (p.gateFraction > 1.0 ? 1.0 : p.gateFraction);
+    // S5.8 overlap toggle: overhang fraction uses the same gate tuning
+    // value, min-clamped so even a 0 occlusion gate still overlaps at
+    // least 5 percent of the following gap.
+    overlapFrac_ = p.noteOverlap ? (p.gateFraction < 0.05 ? 0.05
+                 : (p.gateFraction > 1.0 ? 1.0 : p.gateFraction)) : 0.0;
     for (int i = 0; i < count_; ++i)
     {
         const double absBeat = startBeat_ + onsets_[i];
@@ -136,7 +160,7 @@ void RunEngine::pumpUpTo (double beatNow, RunEventSink& out)
         {
             if (offSent_[j]) continue;
             if (j == count_ - 1) continue; // tail-end steady: no gate (S5.6)
-            const double tOff = startBeat_ + onsets_[j] + gate_ * (onsets_[j + 1] - onsets_[j]);
+            const double tOff = startBeat_ + offBeatOf (j);
             if (tOff <= beatNow + kBeatEps)
             {
                 RunEvent e;

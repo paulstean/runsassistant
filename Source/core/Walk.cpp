@@ -37,6 +37,27 @@ WalkResult buildWalk (const int* spanPitches, int spanLength, bool dirUp, int n,
         return result;
     }
 
+    if (S <= D)
+    {
+        // Under-filled (S < D) and the exact-fit case (S == D): proportional
+        // stride map, seq[k] = round(k x D / S) = floor((2kD + S) / 2S). The
+        // scale climb is compressed evenly across the available steps (leaps
+        // distributed THROUGH the run) instead of advancing step-by-step and
+        // leaping to the target at the end. Ends exactly at D; strides are
+        // never 0 (D > S makes round(k x D / S) strictly increasing).
+        for (int k = 0; k <= S; ++k)
+        {
+            const long long v =
+                ((long long) k * 2LL * (long long) D + (long long) S)
+                    / (2LL * (long long) S);
+            seq[k] = (int) v;
+        }
+        for (int k = 0; k <= S; ++k)
+            out[k] = spanPitches[mapVirtual (seq[k], spanLength, dirUp)];
+        result.count = S + 1;
+        return result;
+    }
+
     if (mode == WalkMode::Fold)
     {
         // S5.4 fold: advance in scale tones, reverse at span boundaries.
@@ -83,19 +104,6 @@ WalkResult buildWalk (const int* spanPitches, int spanLength, bool dirUp, int n,
     }
 
     // Zig-zag, S5.4.
-    if (S <= D)
-    {
-        // S5.4: S <= D -> plain scale run (both modes identical).
-        for (int k = 0; k < S; ++k)
-            seq[k] = k;
-        // Endpoint exactness (S5.4 / S5.3 under-filled): force final to target.
-        seq[S] = D;
-        for (int k = 0; k <= S; ++k)
-            out[k] = spanPitches[mapVirtual (seq[k], spanLength, dirUp)];
-        result.count = S + 1;
-        return result;
-    }
-
     if (((S - D) & 1) != 0)
     {
         // S5.4: S - D odd -> parity drop (n = n - 1) and recompute.
@@ -103,27 +111,41 @@ WalkResult buildWalk (const int* spanPitches, int spanLength, bool dirUp, int n,
         result.parityDrop = true;
     }
     const int b = (S - D) / 2; // backward steps, S5.4
-    // S5.4: distribute the b backward steps deterministically, one every
-    // floor(S / (b+1)) step positions (t_j = j * period, j = 1..b).
-    const long long period = (long long) (S / (b + 1));
+    // S5.4: distribute the b backward steps deterministically and evenly
+    // across the WHOLE run: position j at round(j x S / (b + 1)), j = 1..b
+    // (t_b < S always, since b/(b + 1) x S < S). The earlier fixed period
+    // floor(S / (b + 1)) clustered all backsteps into the first b x period
+    // positions (heavily over-filled runs glued onto a two-note trill and
+    // shoved the whole climb into the tail); scheduling by run index keeps
+    // the climb spread evenly: net travel t - 2 x back(t) is proportional
+    // across the run.
+    long long backNext[2048]; // b <= (n - 1 - 1) / 2 <= 2047 (S5.3 clamp)
+    {
+        const long long twoBp = 2LL * (long long) (b + 1);
+        for (int j = 0; j < b; ++j)
+        {
+            const long long lb = (long long) (j + 1) * (long long) S;
+            backNext[j] = (2LL * lb + twoBp / 2) / twoBp; // floor(x + 1/2)
+        }
+    }
     int cur = 0, back = 0;
-    long long nextBack = period; // period >= 1: S >= D + 2 >= 2b + 1 > b + 1
-    long long never = (long long) S + 2;
+    int jp = 0;
     for (int t = 1; t <= S; ++t)
     {
-        bool doBack = back < b && (long long) t >= nextBack;
+        bool doBack = jp < b && (long long) t >= backNext[jp];
         if (doBack && cur == 0)
         {
             // A backward step cannot leave the span below its start; postpone
-            // this scheduled step to the next position (still deterministic).
-            nextBack = (long long) t + 1;
+            // this scheduled step to the next position (still deterministic;
+            // can only happen early in the run, before any backstep fired).
+            backNext[jp] = (long long) t + 1;
             doBack = false;
         }
         if (doBack)
         {
             --cur;
             ++back;
-            nextBack = back < b ? (long long) t + period : never;
+            ++jp;
         }
         else
         {

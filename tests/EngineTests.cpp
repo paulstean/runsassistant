@@ -178,6 +178,67 @@ TEST_CASE (pair_flush_on_engine_off)
     CHECK_EQ ((int) t.noteOn (3, 64, 100, 5.0).kind, (int) PairOutcome::Nothing);
 }
 
+// ------------------------------------------------ engine-off handoff (S3.3)
+
+TEST_CASE (pair_seed_passed_pending_and_handoff)
+{
+    PairTracker t;
+    CHECK (t.seedPassedPending (0, 60, 100, 0.2)); // note sounded live while Off
+    // Its off passes through normally: never jabbed, not counted.
+    CHECK_EQ ((int) t.noteOff (0, 60).kind, (int) PairOutcome::One);
+    CHECK_EQ (t.latePublishes(), 0);
+    // ... and the channel is free afterwards.
+    CHECK (t.seedPassedPending (0, 62, 90, 0.3));
+    auto b = t.noteOn (0, 67, 40, 0.4); // second note-on completes the pair
+    CHECK_EQ ((int) b.kind, (int) PairOutcome::Pair);
+    CHECK_EQ (b.pendPassedSide, 0);     // the pending (lo) side had passed
+    // The passed side's off passes through; the new side's off consumed.
+    CHECK_EQ ((int) t.noteOff (0, 62).kind, (int) PairOutcome::One);
+    CHECK_EQ ((int) t.noteOff (0, 67).kind, (int) PairOutcome::Nothing);
+    CHECK_EQ (t.latePublishes(), 0);
+}
+
+TEST_CASE (pair_handoff_pending_survives_flush_and_never_jabs)
+{
+    PairTracker t;
+    CHECK (t.seedPassedPending (0, 60, 100, 0.2));
+    // Engine switch (any state): passed-through pendings survive, no jab.
+    PairOutcome outs[16];
+    int published = 99;
+    t.flushAll (outs, 16, &published);
+    CHECK_EQ (published, 0);
+    auto on = t.noteOn (1, 64, 90, 0.5); // other channel unaffected
+    CHECK_EQ ((int) on.kind, (int) PairOutcome::Nothing); // buffers normally
+    t.clearAll(); // hub: passed pendings survive clearAll too
+    CHECK (t.pendingOnAny (nullptr));
+    // A normal engine pending still flushes with a jab as before.
+    PairTracker u;
+    CHECK_EQ ((int) u.noteOn (0, 62, 80, 0.1).kind, (int) PairOutcome::Nothing);
+    PairOutcome outs2[16];
+    int published2 = 0;
+    u.flushAll (outs2, 16, &published2);
+    CHECK_EQ (published2, 1);
+    CHECK_EQ ((int) outs2[0].kind, (int) PairOutcome::LateOnOff);
+}
+
+TEST_CASE (pair_seed_fails_when_channel_busy)
+{
+    PairTracker t;
+    CHECK_EQ ((int) t.noteOn (0, 60, 100, 0.0).kind, (int) PairOutcome::Nothing);
+    CHECK (! t.seedPassedPending (0, 64, 90, 0.1)); // pending occupies
+    auto b = t.noteOn (0, 64, 90, 0.2);
+    CHECK (b.hasPair);
+    CHECK_EQ (b.pendPassedSide, -1); // ordinary pair (S5.2/S3.2)
+    // pair-held notes busy the channel too (S5.2 first bullet)
+    PairTracker u;
+    CHECK_EQ ((int) u.noteOn (0, 60, 100, 0.0).kind, (int) PairOutcome::Nothing);
+    CHECK (u.noteOn (0, 64, 90, 0.1).hasPair);
+    CHECK (! u.seedPassedPending (0, 67, 100, 0.2));
+    // out-of-range channel never seeds
+    PairTracker w;
+    CHECK (! w.seedPassedPending (16, 60, 100, 0.0));
+}
+
 // ------------------------------------------------------------------ RunEngine
 
 TEST_CASE (engine_epsilon_alignment)
@@ -245,7 +306,9 @@ TEST_CASE (engine_simple_scale_run_both_modes_same)
     const int L = c.buildSpan (60, 67, span, 16);
     CHECK_EQ (L, 5);
     CHECK (L - 1 >= 3 - 1); // S <= D... (S = 3, D = 4 actually)
-    // S4 <= D? S=3 <= D=4: both walk modes produce the same plain run (S5.4).
+    // S=3 <= D=4: under-filled -> proportional stride map (S5.4): the climb
+    // is compressed across the steps (leaps spread through the run), both
+    // walk modes identical, ending exactly on the target.
     EvLog foldLog, zigLog;
     p.walk = WalkMode::Fold;
     CHECK (e.startRun (trig (60, 67, 0.0), p));
@@ -341,11 +404,13 @@ TEST_CASE (engine_gate_math)
     const auto& ev = log.events();
     // off_i = onset_i + 0.6 * (onset_{i+1} - onset_i) for interior notes.
     const double on[4] = { 0.0, 2.0 / 3.0, 4.0 / 3.0, 2.0 };
+    // Under-filled plan (S=3, D=4), stride map: 60,62,65,67.
+    const int offPitch[3] = { 60, 62, 65 };
     int seenOffs = 0;
     for (const auto& e2 : ev)
     {
         if (e2.kind != RunEvent::NoteOff) continue;
-        CHECK_EQ (e2.pitch, 60 + 2 * seenOffs); // folded plan: 60,62,64,67
+        CHECK_EQ (e2.pitch, offPitch[seenOffs]);
         CHECK_NEAR (e2.beat, on[seenOffs] + 0.6 * (on[seenOffs + 1] - on[seenOffs]), 1e-9);
         ++seenOffs;
     }
@@ -488,11 +553,10 @@ TEST_CASE (engine_tail_end_steady)
 TEST_CASE (engine_gate_at_high_density)
 {
     // Reported with density 16: n = 16 x 16 = 256 notes; the count is full,
-    // every interior gate is strictly positive for the practically reachable
-    // curve strengths. At k > ~7 the normative power-S map collapses the
-    // last couple of adjacent onsets below double precision (and their
-    // mirror at the run start), which is a property of S5.5 rather than an
-    // emission bug: gaps stay non-negative there.
+    // every interior gate is strictly positive for every curve strength.
+    // (The pre-revision 5.5 map collapsed adjacent onsets below double
+    // precision at k > ~7; the revised inverted map has bounded slopes in
+    // the interior, S13.11.)
     for (double curve : { 0.0, 0.25, 0.5, 0.75, 0.9, 1.0 })
     {
         RunEngine e;
@@ -503,17 +567,52 @@ TEST_CASE (engine_gate_at_high_density)
         for (int i = 0; i + 1 < 256; ++i)
         {
             const double gap = e.onsetOf (i + 1) - e.onsetOf (i);
-            CHECK (gap >= 0.0); // monotonic (S5.5)
+            CHECK (gap > 0.0);
             CHECK (e.gateOf (i) >= 0.0); // gates never negative (S5.8)
             CHECK (e.gateOf (i) <= 0.6 * gap + 1e-12);
-            if (curve <= 0.5)
-            {
-                CHECK (gap > 0.0);
-                CHECK (e.gateOf (i) > 0.0); // no zero gates at density 16
-            }
         }
         e.cancel();
     }
+}
+
+TEST_CASE (engine_legato_overlap_gates)
+{
+    // S5.8 overlap toggle: each interior note-off lands strictly AFTER the
+    // next note-on and strictly BEFORE the note-on after that; the last
+    // interior note's off lands past the target onset (own-gap overhang).
+    // Linear onsets (curve 0, n = 4, 2 beats): rel onsets 0, 2/3, 4/3, 2.
+    RunEngine e;
+    RunParams p = basicParams (2.0, 2);
+    p.noteOverlap = true;
+    CHECK (e.startRun (trig (60, 67, 0.0), p));
+    EvLog log;
+    e.pumpUpTo (100.0, log.sink);
+    auto all = log.events();
+
+    // onsets: 0, 2/3, 4/3, 2. Offs: 0.6 of the following gap past the next
+    // onset for j <= n-3, own-gap overhang for j = n-2:
+    //   off0 = 2/3 + 0.6*(4/3-2/3) = 2/3 + 0.4
+    //   off1 = 4/3 + 0.6*(2-4/3)   = 4/3 + 0.4
+    //   off2 = 2   + 0.6*(2-4/3)   = 2   + 0.4 (past the target onset)
+    CHECK_EQ ((int) all.size(), 7); // 4 ons + 3 interior offs
+    std::vector<RunEvent> ons, offs;
+    for (const auto& ev : all)
+        (ev.kind == RunEvent::NoteOn ? ons : offs).push_back (ev);
+    CHECK_EQ ((int) ons.size(), 4);
+    CHECK_EQ ((int) offs.size(), 3);
+    if (ons.size() == 4 && offs.size() == 3)
+    {
+        CHECK_NEAR (offs[0].beat, 2.0 / 3.0 + 0.6 * 2.0 / 3.0, 1e-9);
+        CHECK_NEAR (offs[1].beat, 4.0 / 3.0 + 0.6 * 2.0 / 3.0, 1e-9);
+        CHECK_NEAR (offs[2].beat, 2.0 + 0.6 * 2.0 / 3.0, 1e-9);
+        // strict overlap: off_i after on_{i+1}, before on_{i+2}
+        CHECK (offs[0].beat > ons[1].beat && offs[0].beat < ons[2].beat);
+        CHECK (offs[1].beat > ons[2].beat && offs[1].beat < ons[3].beat);
+        CHECK (offs[2].beat > ons[3].beat);
+    }
+    // gateOf reports the actual (overlapping) gate
+    CHECK (e.gateOf (0) > e.onsetOf (1) - e.onsetOf (0));
+    e.cancel();
 }
 
 TEST_CASE (engine_accent_bar_origin_and_weights)

@@ -55,6 +55,10 @@ struct RunParams
     uint16_t customOffsets = 0;// Custom tick-set relative to tonic (S9)
     WalkMode walk = WalkMode::Fold; // S4/D10
     double gateFraction = 0.6; // S5.8 settings value (clamped 0..1)
+    // S5.8 overlap toggle: on, each interior note is held slightly past the
+    // NEXT note-on (overhang = clamped gate fraction of the following gap)
+    // so downstream samplers with legato modes hear overlapping notes.
+    bool noteOverlap = false;
     double epsilonBeats = 0.0; // S5.1 alignment epsilon (beats)
     int barNumerator = 4;      // timeSig numerator for bar lines, 0 = none (S5.7)
     // S5.7: bar-line origin. Host bar start when available; otherwise the
@@ -136,10 +140,17 @@ private:
     double startBeat_ = 0.0;
     double beats_ = 0.0;
     double gate_ = 0.6;
+    double overlapFrac_ = 0.0; // > 0 only with noteOverlap (S5.8)
     double onsets_[kMaxNotes];
     uint8_t pitches_[kMaxNotes];
     uint8_t vels_[kMaxNotes];
     bool offSent_[kMaxNotes];
+
+    // Absolute off beat of interior note i: classic gate = onset + gate
+    // fraction of the own gap; overlap: next onset + clamped fraction of the
+    // following gap (own gap for the last interior note) so it lands after
+    // the next note-on but before the one after that (S5.8).
+    double offBeatOf (int i) const;
 
     Counters counters_;};
 

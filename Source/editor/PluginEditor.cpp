@@ -361,8 +361,8 @@ private:
         if (ok)
         {
             *dst[i] = v;
-            markDirty();
-        }
+    markDirty();
+}
         // on invalid input the display reverts to the stored value
         tuneEditors[i].setText (juce::String (*dst[i], 4),
                                 juce::dontSendNotification);
@@ -393,8 +393,11 @@ private:
     void markDirty()
     {
         // S7: settings edits mark the host state dirty (VST3 dirty flag /
-        // clap stateMarkDirty); the values round-trip through the chunk.
-        processor.updateHostDisplay();
+        // CLAP stateMarkDirty); the values round-trip through the chunk.
+        // The non-parameter-changed path is what reaches the host's dirty
+        // flags; the bare updateHostDisplay() defaulted flags do not set it,
+        // so plain settings edits never dirtied the project (REAPER report).
+        processor.markStateDirty();
     }
 
     void loadFromSettings()
@@ -746,8 +749,9 @@ RunsEditor::RunsEditor (RunsProcessor& p)
                    1.0, 16.0, 0.0, 4.0);
     styleParamRow (curve, "Curve",
                    "Timing curve strength: 0% is a uniform sweep; higher "
-                   "values crowd the onsets at the start and end of the "
-                   "run (slow, fast, slow).",
+                   "values play the start and end of the run deliberately "
+                   "spread out and rush through the middle "
+                   "(slow, quick, slow).",
                    0.0, 1.0, 0.0, 0.5);
     styleParamRow (accent, "Accent",
                    "Beat emphasis: on-beat notes play louder, scaled by how "
@@ -818,6 +822,24 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         if (p != nullptr)
             p->setValueNotifyingHost (p->convertTo0to1 (0.0f));
     };
+
+    // ---- Overlap (legato) toggle (S5.8) ----------------------------------
+    // The walk parameter is a 2-choice; the Overlap toggle is a plain bool
+    // parameter, so the ButtonAttachment mirrors GUI, host automation and
+    // the saved chunk state both ways.
+    overlapLabel.setText ("Overlap", juce::dontSendNotification);
+    overlapLabel.setColour (juce::Label::textColourId, runui::text());
+    overlapLabel.setTooltip (overlapButton.getTooltip());
+    addAndMakeVisible (overlapLabel);
+    overlapButton.setName ("Legato overlap");
+    overlapButton.setTooltip (
+        "Legato overlap: hold each run note slightly past the next note-on "
+        "so instruments with a legato mode (which listens for overlapping "
+        "notes) engage it. Off: each note stops before the next starts.");
+    addAndMakeVisible (overlapButton);
+    overlapAttachment =
+        std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            processor.apvts, "overlap", overlapButton);
 
     // ---- Bottom row (S9) -------------------------------------------------
     settingsButton.setTooltip (
@@ -960,7 +982,7 @@ void RunsEditor::pitchTickChanged (int pitchClass)
     else
         mask = (uint16_t) (mask & ~(1u << rel));
     processor.settings.customOffsets = mask;
-    processor.updateHostDisplay(); // chunk dirty (S7)
+    processor.markStateDirty(); // chunk dirty (S7)
     if ((int) std::lround (modeParam->convertFrom0to1 (modeParam->getValue()))
         != runsp::kCustomMode)
         modeParam->setValueNotifyingHost (
@@ -1094,6 +1116,9 @@ void RunsEditor::resized()
         walkLabel.setBounds (r.removeFromLeft (56));
         foldButton.setBounds (r.removeFromLeft (96).reduced (2, 2));
         zigzagButton.setBounds (r.removeFromLeft (116).reduced (2, 2));
+        r.removeFromLeft (16);
+        overlapLabel.setBounds (r.removeFromLeft (64));
+        overlapButton.setBounds (r.removeFromLeft (140).reduced (2, 2));
     }
     area.removeFromTop (8);
 

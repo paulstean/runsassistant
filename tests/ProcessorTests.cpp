@@ -133,6 +133,11 @@ void setParam (RunsProcessor& p, const char* id, float realValue)
     e->setValueNotifyingHost (e->convertTo0to1 (realValue));
 }
 
+void stepN (RunsProcessor& p, Runner& r, int n)
+{
+    for (int i = 0; i < n; ++i) r.step (nullptr);
+}
+
 float paramReal (RunsProcessor& p, const char* id)
 {
     auto* e = p.apvts.getParameter (id);
@@ -673,6 +678,7 @@ void tuneChunkDefaults (RunsProcessor& p)
     setParam (p, "tonic", 5.0f);
     setParam (p, "mode", 10.0f);
     setParam (p, "walk", 1.0f);
+    setParam (p, "overlap", 1.0f);
     p.settings.engineSourceType = 2;
     p.settings.engineNumber = 90;
     p.settings.engineNoteNumbers[0] = 40;
@@ -691,14 +697,18 @@ void tuneChunkDefaults (RunsProcessor& p)
     p.recordEditorWindowSize (1000, 500);
 }
 
-bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b)
+bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b,
+                          bool withOverlap = true)
 {
     bool ok = true;
     const char* ids[RunsProcessor::kNumParams] = { "engine", "beats", "density",
-        "curve", "accent", "arc", "tonic", "mode", "walk" };
+        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap" };
     for (int i = 0; i < RunsProcessor::kNumParams; ++i)
+    {
+        if (! withOverlap && i == RunsProcessor::kOverlapIndex) continue;
         if (std::fabs (paramReal (a, ids[i]) - paramReal (b, ids[i])) > 1e-4f)
             ok = false;
+    }
     if (a.settings.engineSourceType != b.settings.engineSourceType
         || a.settings.engineNumber != b.settings.engineNumber
         || a.settings.epsilonMs != b.settings.epsilonMs
@@ -719,8 +729,9 @@ bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b)
 bool allDefaults (const RunsProcessor& p)
 {
     const char* ids[RunsProcessor::kNumParams] = { "engine", "beats", "density",
-        "curve", "accent", "arc", "tonic", "mode", "walk" };
-    const float defaults[RunsProcessor::kNumParams] = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0 };
+        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap" };
+    const float defaults[RunsProcessor::kNumParams] =
+        { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
     bool ok = true;
     for (int i = 0; i < RunsProcessor::kNumParams; ++i)
     {
@@ -812,16 +823,112 @@ void testChunkVersionRejected()
     CHECK (allDefaults (b));
 }
 
+void testChunkV1BackwardCompatible()
+{
+    // A v1 chunk (9 parameters, schema 1, the P0..P4 project layout) loads
+    // with Overlap off and everything else intact (S7 v2 reader).
+    RunsProcessor a;
+    tuneChunkDefaults (a);
+    juce::MemoryBlock data;
+    a.getStateInformation (data);
+    std::vector<uint8_t> blob ((uint8_t*) data.getData(),
+                               (uint8_t*) data.getData() + data.getSize());
+    // overwrite the v2 chunk with: version = 1 and the Overlap float (last
+    // of the 10 param slots, offset 8 + 9*4) shifted out.
+    const uint32_t v = 1;
+    std::memcpy (blob.data() + 4, &v, 4);
+    const size_t overlapAt = 8 + 9 * 4;
+    std::memmove (blob.data() + overlapAt, blob.data() + overlapAt + 4,
+                  blob.size() - overlapAt - 4);
+    blob.resize (blob.size() - 4);
+    RunsProcessor b;
+    b.setStateInformation (blob.data(), (int) blob.size());
+    CHECK (chunkValuesRetained (a, b, false)); // everything except Overlap
+    CHECK (paramReal (b, "overlap") == 0.0f); // v1 chunk: Overlap off (S7)
+}
+
+void testStateSavedFullyRoundTrip()
+{
+    // Issue report: "check that the plugin state is being saved fully to the
+    // project". Engine switches (GUI or CC origin) mirror into the Engine
+    // parameter now, and the chunk write flushes pending CC mirrors first,
+    // so a save directly after a switch must carry the real state.
+    RunsProcessor a;
+    a.prepareToPlay (44100.0, 2048);
+    Runner r (a, 2048);
+    setParam (a, "beats", 9.0f);
+    stepN (a, r, 2);
+    a.requestEngineState (2); // GUI switch: param mirrors + state dirty
+    stepN (a, r, 2);
+    CHECK_EQ ((int) a.publishedEngineState.load(), 2);
+    // engine state changed via CC origin on a SECOND processor: the mirror
+    // is pending until applied; the chunk write must flush it (S7).
+    RunsProcessor c;
+    c.prepareToPlay (44100.0, 2048);
+    Runner rc (c, 2048);
+    setUpMatrix (c); // engine Up (param path), then switch via CC87
+    rc.run (bufferOf ({
+        { 0, juce::MidiMessage::controllerEvent (1, 87, 100) }, // 80-127 = Down
+    }), 2);
+    CHECK_EQ ((int) c.publishedEngineState.load(), 2);
+    CHECK (paramReal (c, "engine") == 1.0f); // still the earlier setEngine(1):
+    // the CC97-driven switch is queued as a mirror, not applied yet (S11)
+    c.applyPendingCcMirrors();
+    CHECK (paramReal (c, "engine") == 2.0f);
+
+    juce::MemoryBlock data;
+    a.getStateInformation (data);
+    RunsProcessor b;
+    b.setStateInformation (data.getData(), (int) data.getSize());
+    CHECK (paramReal (b, "engine") == 2.0f);
+    CHECK (paramReal (b, "beats") == 9.0f);
+}
+
+void testOverlapParamEmission()
+{
+    // S5.8 overlap toggle through the REAL processBlock: run notes overlap.
+    // Linear spacing (curve 0, beats 4, density 2 -> n = 8, gaps 0.5 beats):
+    // classic gating emits strict on/off alternation (each off before the
+    // next on); overlap ON emits off_i after on_{i+1}, which appears as an
+    // on-note immediately followed by another note-on mid-run.
+    RunsProcessor p;
+    setUpMatrix (p); // engine Up, density 2 (n = 8), beats 4, curve/accent 0
+    setParam (p, "overlap", 1.0f);
+    Runner r (p, 2048);
+    r.run (bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+        { 0, juce::MidiMessage::noteOn (1, 67, (juce::uint8) 70) },
+    }), 60);
+
+    CHECK_EQ (countIf (r.out, isNoteOn), 8);
+    bool sawOverlap = false;
+    for (size_t i = 0; i + 2 < r.out.size(); ++i)
+        if (r.out[i].msg.isNoteOn() && r.out[i + 1].msg.isNoteOn())
+            sawOverlap = true; // on-note without an off between (overlap)
+    CHECK (sawOverlap);
+
+    // same run with overlap OFF must stay strictly alternating
+    RunsProcessor q;
+    setUpMatrix (q);
+    Runner rq (q, 2048);
+    rq.run (bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+        { 0, juce::MidiMessage::noteOn (1, 67, (juce::uint8) 70) },
+    }), 60);
+    CHECK_EQ (countIf (rq.out, isNoteOn), 8);
+    for (size_t i = 0; i + 2 < rq.out.size(); ++i)
+        if (rq.out[i].msg.isNoteOn() && rq.out[i + 1].msg.isNoteOn())
+        {
+            CHECK (false); // classic gate: no back-to-back ons before the tail
+            break;
+        }
+}
+
 // ------------------------------------------------------- engine-switch chain
 // P4 hardening regressions (reported: "clicking Up highlights Down"): every
 // engine state must land exactly, via BOTH the GUI queue path
 // (requestEngineState) and the APVTS parameter path, and a host param echo
 // inside the grace window must NOT revert the state.
-
-void stepN (RunsProcessor& p, Runner& r, int n)
-{
-    for (int i = 0; i < n; ++i) r.step (nullptr);
-}
 
 void testEngineChainQueuePath()
 {
@@ -940,6 +1047,127 @@ void testEngineSwitchCutsActiveRunBothPaths()
     CHECK (r.out.size() == prev2 + 1);
     CHECK (hasEventAt (r.out, r.block - 1, 11, true, 55));
 }
+
+// ------------------------------------------------ engine-off handoff (S3.3)
+// note-on with the engine Off passes through AND can still seed the pair
+// pending when the engine comes back on: the run starts from the SECOND
+// note-on, and the engine can be switched off via the engine CC without any
+// note-off traffic (no jabs; the still-running final note is closed by the
+// switch cut).
+
+void testEngineCcValueRanges()
+{
+    // S3.1/D13 single-definition mapping.
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (0), 0);
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (40), 0);
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (41), 1);
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (79), 1);
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (80), 2);
+    CHECK_EQ (RunsProcessor::engineStateFromCcValue (127), 2);
+}
+
+void engineOffHandoffSetup (RunsProcessor& p)
+{
+    // engine still Off (boots Off, no setEngine); matrix-like tuning.
+    p.prepareToPlay (44100.0, 2048);
+    setParam (p, "density", 2.0f);
+    setParam (p, "curve", 0.0f);
+    setParam (p, "accent", 0.0f);
+}
+
+void testEngineOffHandoffPairFiresAtSecondNoteOn()
+{
+    RunsProcessor p;
+    engineOffHandoffSetup (p);
+    Runner r (p, 2048);
+    // (1) Off: the note passes through untouched and stays latched while held
+    r.run (bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+    }), 2);
+    CHECK (hasEventAt (r.out, 0, 0, true, 60));
+    // (2) CC87 Up (range 41-79) while the note is still held: pending seeds
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::controllerEvent (1, 87, 50) },
+    }));
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1);
+    // (3) second note-on completes the pair: run fires from it (both note-ons
+    // consumed - no immediate passthrough of 64)
+    const size_t prev = r.out.size();
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 110) },
+    }));
+    for (const auto& e : r.out) // nothing at/beyond prev refers to pitch 64
+        if (e.msg.isNoteOn() && e.msg.getNoteNumber() == (juce::uint8) 64)
+        {
+            const bool isRunTail = e.block >= 3; // run's last note lands on 64
+            CHECK (isRunTail);
+        }
+    // run reaches its target (n = 8, 4 beats): drive the run out
+    r.runEmpty (60);
+    const auto ui = p.latestUiState();
+    CHECK_EQ (ui.notesEmitted, 8);
+    CHECK_EQ (ui.noteCount, 8);
+    // first run note is the handoff note's pitch (Up starts at lo)
+    bool firstRunOnSet = false;
+    for (const auto& e : r.out)
+        if (e.block >= 3 && e.msg.isNoteOn())
+        {
+            CHECK_EQ ((int) e.msg.getNoteNumber(), 60);
+            firstRunOnSet = true;
+            break;
+        }
+    CHECK (firstRunOnSet);
+    CHECK (countIf (r.out, isNoteOn) == 9); // 1 passthrough + 8 run notes
+    // (4) switch Off via CC87 (range 0-40) without ANY note-off sent: clean.
+    // The final (target) run note is closed by the switch itself, nothing
+    // is jabbed.
+    const size_t prev2 = r.out.size();
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::controllerEvent (1, 87, 0) },
+    }));
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
+    const auto ui2 = p.latestUiState(); // FIFO drains once: use this snapshot
+    CHECK_EQ (ui2.latePublishes, 0);
+    CHECK_EQ (ui2.cuts, 1);
+    bool sawOffInSwitchBlock = false;
+    for (int i = (int) prev2; i < (int) r.out.size(); ++i)
+        if (r.out[i].msg.isNoteOff()) sawOffInSwitchBlock = true;
+    CHECK (sawOffInSwitchBlock);
+    // (5) trigger offs afterwards pass through (engine Off, S3.3)
+    const size_t prev3 = r.out.size();
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
+    }));
+    CHECK (r.out.size() == prev3 + 1);
+    CHECK (hasEventAt (r.out, r.block - 1, 0, false, 60));
+}
+
+void testEngineOffHandoffSwitchOffWithoutSecondNote()
+{
+    // Engine off again before the second note-on: the seeded (already
+    // sounding) pending is never jabbed; its note-off passes through later.
+    RunsProcessor p;
+    engineOffHandoffSetup (p);
+    Runner r (p, 2048);
+    r.run (bufferOf ({
+        { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+    }), 1);
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::controllerEvent (1, 87, 50) },
+    }));
+    CHECK_EQ ((int) p.publishedEngineState.load(), 1);
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::controllerEvent (1, 87, 0) },
+    }));
+    CHECK_EQ ((int) p.publishedEngineState.load(), 0);
+    r.runEmpty (3);
+    CHECK_EQ (p.latestUiState().latePublishes, 0);
+    r.step (&bufferOf ({
+        { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
+    }));
+    CHECK (r.out.back().msg.isNoteOff()
+           && r.out.back().msg.getNoteNumber() == (juce::uint8) 60);
+}
 } // namespace
 
 int main()
@@ -966,11 +1194,17 @@ int main()
     testChunkTrailingGarbageIgnored();
     testChunkWrongMagicRejected();
     testChunkVersionRejected();
+    testChunkV1BackwardCompatible();
+    testStateSavedFullyRoundTrip();
+    testOverlapParamEmission();
     testEngineChainQueuePath();
     testEngineChainParamPath();
     testEngineChainSequence();
     testEngineEchoIgnoredDuringGrace();
     testEngineSwitchCutsActiveRunBothPaths();
+    testEngineCcValueRanges();
+    testEngineOffHandoffPairFiresAtSecondNoteOn();
+    testEngineOffHandoffSwitchOffWithoutSecondNote();
     std::printf ("%s (%d failures)\n",
                  failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

@@ -14,7 +14,13 @@
 //  - note-on while pending exists with the same pitch: publish the pending
 //    note normally and pass the new note-on through (no pair).
 //  - note-offs of already-paired notes: consumed silently.
-//  - flush(): engine-switch to Off: publish pending notes late (S5.2).
+    //  - flush(): engine-switch to Off: publish pending notes late (S5.2).
+    //  - ADDITIVE handoff (S3.3): note-ons that passed through while the
+    //    engine was Off can be seeded as the channel's pending note when the
+    //    engine comes back on (seedPassedPending). Such pendings are marked
+    //    "passed through": they already sounded live, so flushes never jab
+    //    them, their note-offs pass through, and they are not consumed as
+    //    pair-held latches on their already-sounding side.
 
 #include <cstdint>
 
@@ -48,6 +54,11 @@ struct PairOutcome
     int pitchLo = 0, pitchHi = 0;
     int velLo = 0, velHi = 0;
     double pendingBeat = 0.0; // pending note's latched beat position (S5.2)
+    // Handoff (S3.3): 0 = the pair's lo side is the passed-through pending
+    // note, 1 = the hi side is, -1 = no passed-through pending involved
+    // (PublishAndPass also sets it non-negative to signal "pending already
+    // sounded"; use as a boolean there).
+    int pendPassedSide = -1;
 };
 
 class PairTracker
@@ -83,12 +94,23 @@ public:
     PairOutcome noteOn (int channel, int pitch, int velocity, double beatPosition);
     PairOutcome noteOff (int channel, int pitch);
 
+    // Handoff (S3.3): seed a pending note whose note-on already passed
+    // through while the engine was Off. Returns false (state untouched) when
+    // the channel cannot buffer (pending exists or held notes occupy it,
+    // S5.2 first bullet).
+    bool seedPassedPending (int channel, int pitch, int velocity,
+                            double beatPosition);
+
 private:
     struct ChannelState
     {
         bool hasPending = false;
         int pendPitch = 0, pendVel = 0;
         double pendBeat = 0.0;
+        // Handoff (S3.3): the pending note already passed through while the
+        // engine was Off; it keeps its pending role (pair handoff) but must
+        // never be jabbed and must not latch pair-held state on that side.
+        bool pendIsPassed = false;
         // Consumed pair latches: their note-offs are consumed silently (S5.2),
         // and while still held they occupy the channel (third chord note
         // passes through, S3.2 edge).
@@ -102,6 +124,7 @@ private:
         void clear()
         {
             hasPending = false;
+            pendIsPassed = false;
             pairHeld0 = pairHeld1 = false;
             pairPitch0 = pairPitch1 = -1;
             publishedCount = 0;

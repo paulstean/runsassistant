@@ -15,18 +15,37 @@ void PairTracker::resetAll()
 void PairTracker::clearAll()
 {
     for (int c = 0; c < kNumChannels; ++c)
+    {
+        // Handoff (S3.3): passed-through pendings survive engine switches so
+        // a state flip Up<->Down (or Off and back) never drops the handoff.
+        const bool keep = channels_[c].hasPending && channels_[c].pendIsPassed;
+        const int pitch = channels_[c].pendPitch;
+        const int vel = channels_[c].pendVel;
+        const double beat = channels_[c].pendBeat;
         channels_[c].clear();
+        if (keep)
+        {
+            channels_[c].hasPending = true;
+            channels_[c].pendIsPassed = true;
+            channels_[c].pendPitch = pitch;
+            channels_[c].pendVel = vel;
+            channels_[c].pendBeat = beat;
+        }
+    }
     // latePublishes_ intentionally kept (session diagnostics, S5.8).
 }
 
 void PairTracker::flushAll (PairOutcome* outs, int cap, int* publishedCount)
 {
     // S5.2: engine switch to Off: flush all pending notes (publish late).
+    // Handoff (S3.3): pendings that already passed through stay pending and
+    // are never jabbed (they already sounded live).
     if (publishedCount != nullptr) *publishedCount = 0;
     for (int c = 0; c < kNumChannels; ++c)
     {
         ChannelState& ch = channels_[c];
         if (! ch.hasPending) continue;
+        if (ch.pendIsPassed) continue;
         ch.hasPending = false;
         if (outs != nullptr && cap > 0 && *publishedCount < cap)
         {
@@ -60,6 +79,9 @@ PairOutcome PairTracker::noteOn (int channel, int pitch, int velocity, double be
             o.a = { ch.pendPitch, ch.pendVel, true };
             o.b = { pitch, velocity, true };
             o.pendingBeat = ch.pendBeat; // latch for late offset restore (P2)
+            // Handoff (S3.3): signal "pending already sounded" so the
+            // processor does not re-articulate it.
+            o.pendPassedSide = ch.pendIsPassed ? 0 : -1;
             ch.addPublished (ch.pendPitch);
             ch.addPublished (pitch);
             ch.hasPending = false;
@@ -68,9 +90,16 @@ PairOutcome PairTracker::noteOn (int channel, int pitch, int velocity, double be
         {
             // S5.2/S3.2: pair forms; both consumed. Velocities pair with their
             // pitches (S3.2); pending latched offset returned for alignment.
+            // Handoff (S3.3): a passed-through pending side must not latch
+            // pair-held state (it already sounded live; its note-off has to
+            // pass through).
             o.kind = PairOutcome::Pair;
             o.hasPair = true;
             o.pendingBeat = ch.pendBeat;
+            const bool pendPassed = ch.pendIsPassed;
+            // pitch < pend <-> the pending is the pair's hi side
+            o.pendPassedSide = pendPassed ? (pitch < ch.pendPitch ? 1 : 0)
+                                          : -1;
             if (pitch < ch.pendPitch)
             {
                 o.pitchLo = pitch;          o.velLo = velocity;
@@ -81,10 +110,20 @@ PairOutcome PairTracker::noteOn (int channel, int pitch, int velocity, double be
                 o.pitchLo = ch.pendPitch;   o.velLo = ch.pendVel;
                 o.pitchHi = pitch;          o.velHi = velocity;
             }
-            ch.pairHeld0 = ch.pairHeld1 = true;
-            ch.pairPitch0 = ch.pendPitch;
+            if (pendPassed)
+            {
+                ch.pairHeld0 = false;
+                ch.pairPitch0 = -1;
+            }
+            else
+            {
+                ch.pairHeld0 = true;
+                ch.pairPitch0 = ch.pendPitch;
+            }
+            ch.pairHeld1 = true;
             ch.pairPitch1 = pitch;
             ch.hasPending = false;
+            ch.pendIsPassed = false;
         }
         return o;
     }
@@ -105,7 +144,22 @@ PairOutcome PairTracker::noteOn (int channel, int pitch, int velocity, double be
     ch.pendPitch = pitch;
     ch.pendVel = velocity;
     ch.pendBeat = beatPosition; // latch for epsilon alignment (S5.2)
+    ch.pendIsPassed = false;
     return o;
+}
+
+bool PairTracker::seedPassedPending (int channel, int pitch, int velocity,
+                                     double beatPosition)
+{
+    if (channel < 0 || channel >= kNumChannels) return false;
+    ChannelState& ch = channels_[channel];
+    if (ch.hasPending || ch.hasHeldAnything()) return false; // S5.2 first bullet
+    ch.hasPending = true;
+    ch.pendPitch = pitch;
+    ch.pendVel = velocity;
+    ch.pendBeat = beatPosition;
+    ch.pendIsPassed = true; // handoff: already sounded live, never jab it
+    return true;
 }
 
 PairOutcome PairTracker::noteOff (int channel, int pitch)
@@ -121,13 +175,22 @@ PairOutcome PairTracker::noteOff (int channel, int pitch)
 
     if (ch.hasPending && pitch == ch.pendPitch)
     {
+        ch.hasPending = false;
+        if (ch.pendIsPassed)
+        {
+            // Handoff (S3.3): the pending note already sounded live, so its
+            // note-off passes through normally (no jab, not counted).
+            ch.pendIsPassed = false;
+            o.kind = PairOutcome::One;
+            o.a = { pitch, 0, false };
+            return o;
+        }
         // S5.2: jabbed a lone note: late publish at the note-off's position,
         // counted and surfaced in the debug overlay.
         ++latePublishes_;
         o.kind = PairOutcome::LateOnOff;
         o.a = { ch.pendPitch, ch.pendVel, true };
         o.b = { ch.pendPitch, ch.pendVel, false };
-        ch.hasPending = false;
         return o;
     }
 

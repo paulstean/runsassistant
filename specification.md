@@ -20,7 +20,9 @@ chosen number of host beats. Realism has two pillars:
 
 Velocity is additionally a fade from the first trigger note's velocity to the
 target note's velocity, times an optional swell/taper arc, so a run can start fff
-and end ppp (or vice versa) by how the pair is played.
+and end ppp (or vice versa) by how the pair is played. A toggle chooses whether
+produced notes overlap slightly (for instruments whose legato mode listens for
+overlapping notes) or stop before the next note starts.
 
 ---
 
@@ -40,7 +42,7 @@ and end ppp (or vice versa) by how the pair is played.
 | D10 | Pitch walk | When the requested note count exceeds the scale degrees in the span: user chooses Fold (bounce back at the boundaries) or Zig-zag (periodic single backward steps distributed through the run) |
 | D11 | Velocity stack | base fade (trigger-note velocities) x accent emphasis (beat proximity) x arc (swell/taper), clamped 1..127 |
 | D12 | Scale | Tonic + mode dropdowns plus an always-visible 12-pitch-class tick grid. Mode selection ticks the grid; manual ticks switch the dropdown to Custom |
-| D13 | Remote control | Engine switch source choosable: MIDI notes, CC values, or program changes. Default CC87 (0=off, 1=up, 2=down); note mode default C0 / C#0 / D0; PC mode default 0 / 1 / 2. Every other parameter maps to a user-chosen CC, defaults CC88 onward in GUI order; the GUI mirrors incoming CC values |
+| D13 | Remote control | Engine switch source choosable: MIDI notes, CC values, or program changes. Default CC87 (0-40=off, 41-79=up, 80-127=down); note mode default C0 / C#0 / D0; PC mode default 0 / 1 / 2. Every other parameter maps to a user-chosen CC, defaults CC88 onward in GUI order; the GUI mirrors incoming CC values |
 | D14 | Ordering | Within a block, engine-switch events (CC / PC / keyswitch notes) are processed before note (pair) events, even at the same sample offset |
 | D15 | State | Opaque versioned project chunk for all parameters and CC mappings. Runtime state (pending pair notes, active run, PRNG) is never persisted. No text preset files in v1 |
 | D16 | UI | No graphical display of the run. Panel of controls only; dark theme matching Eloquent house style. All state edits immediate (no undo manager in v1) |
@@ -78,17 +80,27 @@ Switch sources (settings):
 
 | Source | Off | Up | Down | Default |
 |---|---|---|---|---|
-| CC | CC87 value 0 | CC87 value 1 | CC87 value 2 | yes |
+| CC | CC87 value 0-40 | CC87 value 41-79 | CC87 value 80-127 | yes |
 | Notes | C0 (12) | C#0 (13) | D0 (14) | - |
 | PC | 0 | 1 | 2 | - |
 
 * The CC number / note numbers / PC numbers are user-editable in settings.
-* CC mode: other values on the engine CC are ignored (no state change). The engine
-  CC event itself is absorbed in every engine state.
+* CC mode: the engine CC value selects a state by range (0-40, 41-79, 80-127);
+  every value selects a state. The engine CC event itself is absorbed in every
+  engine state.
 * Note mode: the keyswitch notes are absorbed when the engine is Up or Down and
   passed through when the engine is Off.
 * The GUI three-state switch mirrors and drives the same state; changing it from
   the GUI while a run is active cuts the run (section 5.6).
+
+Engine-off handoff: a note-on that passed through while Off and is still **held**
+seeds as that channel's pending note when the engine switches to Up/Down, so the
+next note-on completes the pair right there and the run starts from that second
+note-on (section 5.2 with a passed-through pending). Such handoff pendings never
+jab and survive engine switches: they already sounded live, so switching the
+engine off again via the engine CC requires no note-off traffic - a still-running
+run is closed by the switch cut (section 5.6) and the normally sounding notes
+keep passing through.
 
 ### 3.2 Trigger pair detection
 
@@ -142,6 +154,7 @@ bindings are inert.
 | 7 | Tonic | C..B (12 steps) | C | 93 |
 | 8 | Mode | index into mode list | Major | 94 |
 | 9 | Walk mode | Fold / Zig-zag | Fold | 95 |
+| 10 | Note overlap | Off / On | Off | none (not CC-mappable in v1) |
 
 CC value mapping for continuous parameters: linear scale CC 0..127 to the parameter
 range. Tonic: floor(CC x 12 / 128). Mode: floor(CC x nmodes / 128). Walk: 0..63 =
@@ -158,8 +171,8 @@ Settings (chunk state, not host parameters in v1):
 * Engine switch event numbers (CC number, or the three keyswitch notes, or three
   PC numbers).
 * Per-parameter bound CC numbers (table above), each may be "none".
-* Alignment epsilon (section 5.3), accent falloff constants (section 5.7),
-  note gate fraction (section 5.5) - visible in Settings as raw numeric fields with
+* Alignment epsilon (section 5.1), accent falloff constants (section 5.7),
+  note gate fraction (section 5.8) - visible in Settings as raw numeric fields with
   defaults; tuning knobs, not performance controls.
 
 Duplicate CC assignments in the bindings table are refused in the UI with a
@@ -251,9 +264,10 @@ final note: no fixed gate - held (tail-end steady, section 5.6)
 
 (curve_map is defined in section 5.5.)
 
-If `n - 1 < scale degree count in span` the run is under-filled: only `n` notes are
-emitted and the pitch walk still must end exactly on the target (both walk modes
-guarantee endpoint exactness through the backward-step budget, 5.4).
+If `n - 1 < scale degree count in span` the run is under-filled: only `n` notes
+are emitted, spread as a proportional stride map across the whole span (the
+climb is compressed across the run; 5.4) and the pitch walk still ends exactly
+on the target.
 
 ### 5.4 Pitch walk (Fold and Zig-zag)
 
@@ -268,11 +282,13 @@ distinct scale pitches along the walk, and S = n - 1 steps required.
   target pitch; intermediate notes alternate direction at the boundaries).
 * **Zig-zag:** the walk is monotonic-forward with periodic single backward steps.
   Number of backward steps b = (S - D) / 2 (this is integral when S - D is even).
-  The b backward steps are distributed as evenly as possible across the run (every
-  floor(S / b+1) positions pattern; deterministic, no randomness in v1). If
+  The b backward steps are distributed as evenly as possible across the run (backstep
+  j at round(j x S / (b+1)); deterministic, no randomness in v1; net travel is
+  proportional to position across the run). If
   S - D is odd, drop a note (n = n - 1, one fewer note than asked) and recompute;
-  count the dropped note in the debug overlay. If S <= D no backward steps occur
-  and both modes produce the same plain scale run.
+  count the dropped note in the debug overlay. Under-fill (S < D) and the exact
+  fit (S == D) use the proportional stride map instead - both modes produce the
+  same compressed climb then.
 * Consecutive pitches never repeat (a backward step is exactly one tone back; fold
   turns at the boundary without doubling a note).
 * Endpoints: pitch_0 = run start, pitch_{n-1} = run target, always exact.
@@ -282,17 +298,20 @@ The user chooses the mode per parameter D10; the choice is live at trigger time.
 ### 5.5 Shape (S-curve map)
 
 ```
-curve_map(p) = 1 / (1 + ((1 - p) / p) ^ k),  k = 1 + 9 x curveStrength
+curve_map(p) = 1 / (1 + ((1 - p) / p) ^ e),  e = 1 - 0.9 x curveStrength
 ```
 
-* curveStrength 0 -> k = 1 -> y = p exactly (linear).
-* Larger k -> stronger slow-fast-slow; asymptotic behavior approaches a step.
+* curveStrength 0 -> e = 1 -> y = p exactly (linear).
+* Larger strength -> smaller e -> the onset spacing widens at both rims
+  (deliberate start, settling target note) and the middle of the run is
+  traversed quickly: slow, quick, slow (section 1).
 * Symmetric: y(1 - p) = 1 - y(p); mid anchor y(0.5) = 0.5.
 * Monotonic; endpoints exact. Cheap evaluation; no inversion needed.
 
-Interpretation: with k large, most notes crowd near the start and the end of the
-range and the middle is skipped through quickly (the "run" is slow at both rims
-and fast in the middle).
+The v1 draft inverted this family (exponent k = 1 + 9 x curveStrength); a
+k > 1 exponent crowds the onsets AT the rims, which reads as fast, slow, fast
+and collapses beyond ~5 percent strength (REAPER pass). See the deviations
+list (13.11).
 
 Discretionary alternative (cubic bezier control points) documented for comparison;
 v1 ships the power map because it is one formula and exactly linear at 0 percent.
@@ -341,6 +360,17 @@ These are documented as v1 tunables, reviewed by ear in the REAPER test pass.
   release or another cut condition, so Beats controls the run's sweep span while
   the held pair controls when the target note actually ends.
   No user-facing note-length control in v1 (the gate fraction is a Settings value).
+* **Overlap toggle** (host parameter, section 4 row 10, default off): with
+  overlap ON each interior note is held slightly PAST the next note-on - its
+  note-off lands one overhang later, where the overhang is the clamped gate
+  fraction (0.05 minimum so the overlap never vanishes) of the gap FOLLOWING the
+  next onset; for the last interior note (no following gap) the overhang uses its
+  own gap, extending past the target onset into its held tail. The note-off must
+  stay strictly before the note-on after that, because Fold walks can revisit a
+  pitch two steps apart (a late note-off would kill the retriggered pitch).
+  Overlap only shifts interior note-offs; cut semantics (5.6) and the tail-end
+  hold are unchanged. Off: the classic 5.5-percentage gate (note-off before the
+  next note-on). The overhang share reuses the gate-fraction tuning value.
 * All emitted events carry exact sample offsets (block-relative). No input MIDI
   event is dropped silently: pass-through events pass; absorbed events are
   consumed by documented behavior (pair keyswitch / keyswitch notes / bound CCs).
@@ -382,9 +412,14 @@ Chunk: magic `RUN1` + u32 schema_version + all parameters (section 4) + settings
 (engine source type + numbers + bindings table + tuning constants + GUI window
 size footer `RUNV`, same pattern as Eloquent). Validation: magic + version check,
 range-clamp every field, ignore trailing bytes, reject truncated chunks (keep
-current state). Runtime state is never serialized. Every parameter edit marks the
+current state). Schema v2 adds the Overlap parameter; v1 chunks load with
+Overlap off. Runtime state (pending pair notes, active run, PRNG) is never
+persisted. No text preset files in v1. Every parameter edit marks the
 host state dirty (VST3 dirty flag / CLAP `stateMarkDirty`) except pure GUI
-geometry.
+geometry. The engine switch (GUI, CC, keyswitch, PC) mirrors into the Engine
+parameter for the host dirty/notification path, and pending CC mirrors are
+flushed into parameters before the chunk is written so a save always carries
+the last held control values.
 
 No text preset files v1 (D15). Undo: none (D16). Reset to defaults action in
 Settings restores factory parameter values and CC bindings (not undoable in v1).
@@ -395,8 +430,8 @@ Settings restores factory parameter values and CC bindings (not undoable in v1).
 
 Section 4's table is exposed verbatim: Engine (discrete 3), Beats (int 1..16),
 Density (float 1..16), Curve (float 0..1), Accent (float 0..1), Arc (float -1..+1),
-Tonic (int 0..11 with value-to-string), Mode (int indexed), Walk (bool/discrete 2).
-Settings and CC bindings are chunk-only, never parameters.
+Tonic (int 0..11 with value-to-string), Mode (int indexed), Walk (bool/discrete 2),
+Overlap (bool). Settings and CC bindings are chunk-only, never parameters.
 
 ---
 
@@ -414,7 +449,7 @@ dark theme (Eloquent palette). No graphs, no list, no playhead display.
 +----------------------------------------------------------------------------+
 | Beats  [ 4 ]      Density [====o----] 4.0 n/beat                           |
 | Curve   [====o----] 50%    Accent [====o----] 50%    Arc [o------] 0%      |
-| Walk: ( ) Fold  ( ) Zig-zag                                                |
+| Walk: ( ) Fold  ( ) Zig-zag   Overlap: [ ] On                              |
 +----------------------------------------------------------------------------+
 | Settings...                                              [Debug overlay]   |
 +----------------------------------------------------------------------------+
@@ -436,6 +471,8 @@ dark theme (Eloquent palette). No graphs, no list, no playhead display.
   Hover tooltips state the effect in plain language. All sliders mirror bound CCs
   (subsection 4) in real time without dirtying the chunk from MIDI input.
 * **Walk radios:** Fold / Zig-zag, one selection.
+* **Overlap toggle:** Off/On checkbox next to the walk radios (host parameter,
+  saved in the chunk); see 5.8 for the emission rule.
 * **Settings dialog:** engine source type (Notes / CC / PC) + its event numbers;
   per-parameter CC bindings table with conflict prevention; tuning constants
   (alignment epsilon, gate fraction, downbeat weight, mid-bar beat weight);
@@ -538,6 +575,58 @@ once).
 
 Any further deviation found during implementation must be appended here with the
 planned behavior, the shipped behavior, and the reason.
+
+11. **Curve map direction (S5.5).** Planned: power-S with exponent
+    k = 1 + 9 x curveStrength. Shipped: the same family with the INVERTED
+    exponent e = 1 - 0.9 x curveStrength. Reason (REAPER pass): with k > 1
+    the onsets crowded AT the rims - an instant burst at the start, a
+    metronome-style hole in the middle, an instant burst at the end; only
+    strengths up to ~5 percent were usable. The inherited introduction
+    (S1) reads slow, quick, then slowing again, and the lowest exponent of
+    the same family (e <= 1) produces exactly that: onset spacing widens at
+    both rims and rushes through the middle, linear at 0 percent, all
+    anchor/monotonic/symmetry properties kept. Same reason documented in
+    CurveMap.h.
+
+12. **Note overlap toggle (S5.8).** Not in the v1 table; added as host
+    parameter row 10 (default off, chunk covered by schema v2) after the
+    owner report "add a toggle to choose if produced notes overlap" - many
+    virtual instruments engage their legato mode only when the notes
+    overlap. It reuses the gate-fraction tuning value as the overhang share
+    and is not CC-mappable (bindings table unchanged at 8 rows; every
+    parameter list enumerates 9 GUI rows for the engine + 8 bindings).
+
+13. **Engine-switch mirroring (S3.1/S7).** Planned: GUI engine switches
+    bypass the host parameter entirely. Shipped: the switch mirrors into
+    the Engine parameter (and non-parameter chunk edits set the host dirty
+    flag through the nonParameterStateChanged change detail). Reason:
+    bypassing left the host unaware (project not marked modified; saved
+    chunk carried a stale engine state). Echo safety is preserved because
+    the parameter now always tracks the real engine state (same-value
+    echoes dedup; the grace window covers stale host echoes of older
+    cached values).
+
+15. **Beat-count scaling of the walk (S5.4, REAPER pass).** Planned: the
+    under-filled run advances one scale tone per step and the target is
+    forced onto the final note (advance-then-leap); over-filled zig-zag
+    schedules the b backward steps at one every floor(S / (b+1)) positions
+    from wherever the walk happened to be. Shipped: under-filled runs use a
+    proportional stride map (seq[k] = round(k x D / S)) so the whole climb
+    is compressed across the run (leaps spread through the walk, no
+    terminal leap); over-filled zig-zag schedules backstep j at
+    round(j x S / (b + 1)), spreading backsteps across the entire run so
+    net travel scales with position. Reason (REAPER pass): advance-then-leap
+    landed the target note mid-run for short runs against wide spans (read
+    as a truncated run plus a jump), and the fixed-period distribution
+    clustered every backstep into the first b x period positions - a 2-note
+    trill for most of the run with the climb shoved into the last few
+    steps. Both endpoints and the parity contract are unchanged.
+
+14. **Mirror flush at save (S7).** Planned: parameter mirrors applied only
+    while an editor Timer runs. Shipped: getStateInformation drains the
+    pending mirror FIFO first, and the mirror Timer is started from the
+    editor; a bound-CC tweak with the editor closed still lands in the
+    chunk at the next save because the flush runs inside the state write.
 
 ---
 

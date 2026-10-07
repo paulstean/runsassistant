@@ -14,11 +14,12 @@ class DebugOverlayPanel;
 //   title row:   title + engine Off/Up/Down toggles (engine param)
 //   scale row:   tonic combo, mode combo (17 entries), 12 pitch-class ticks
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
-//   walk row:    Fold / Zig-zag radios (walk param)
+//   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
 //   bottom row:  Settings... dialog + Debug overlay toggle (S9)
-// Engine / scale / walk / slider state lives in the APVTS, so host automation
-// and bound-CC mirrors arrive through the attachments (S4/S11); the processor
-// observes an engine value change at block time and cuts the active run (S5.6).
+// Engine / scale / walk / overlap / slider state lives in the APVTS, so host
+// automation and bound-CC mirrors arrive through the attachments (S4/S11);
+// the processor observes an engine value change at block time and cuts the
+// active run (S5.6).
 class RunsEditor : public juce::AudioProcessorEditor,
                    private juce::Slider::Listener,
                    private juce::Timer,
@@ -79,12 +80,16 @@ private:
     // Parameter sliders + readouts
     ParamRow beats, density, curve, accent, arc;
 
-    // Walk radios
+    // Walk radios + overlap (legato) toggle
     juce::Label walkLabel;
     juce::ToggleButton foldButton { "Fold" };
     juce::ToggleButton zigzagButton { "Zig-zag" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         walkAttachment;
+    juce::Label overlapLabel;
+    juce::ToggleButton overlapButton { "Overlap" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        overlapAttachment;
 
     // Bottom row
     juce::TextButton settingsButton { "Settings..." };

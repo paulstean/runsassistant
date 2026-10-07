@@ -26,12 +26,16 @@ constexpr int kModeCcSteps = 17;
 constexpr int kCcNone = 255;          // S4 "none" binding sentinel
 constexpr int kCcAllNotesOff = 123;   // S5.6 cut source
 
-// S7 chunk layout: magic "RUN1" + u32 schema_version + 9 raw parameter
-// values + settings (source type + engine numbers + 8 bindings + 4 tuning
-// constants + custom mask) + optional trailing RUNV window-size footer.
+// S7 chunk layout: magic "RUN1" + u32 schema_version + raw parameter
+// values (9 in v1, 10 from v2: the Overlap toggle) + settings (source type +
+// engine numbers + 8 bindings + 4 tuning constants + custom mask) + optional
+// trailing RUNV window-size footer. v1 chunks load with Overlap off (S7
+// range-clamps + backwards-compatible read).
 constexpr uint8_t kChunkMagic[4]  = { 'R', 'U', 'N', '1' };
 constexpr uint8_t kFooterMagic[4] = { 'R', 'U', 'N', 'V' };
-constexpr uint32_t kChunkVersion = 1;
+constexpr uint32_t kChunkVersion = 2;
+constexpr uint32_t kChunkMinVersion = 1; // v1 chunks load (Overlap defaults)
+constexpr int kParamsV1 = 9;
 constexpr int kSettingsBytes = 1                    // source type
     + 1                                             // engine CC number
     + 3 + 3                                         // engine notes / PCs
@@ -40,7 +44,7 @@ constexpr int kSettingsBytes = 1                    // source type
     + 2;                                            // custom tick set
 constexpr int kChunkMinSize = 4                     // magic
     + 4                                             // u32 version
-    + RunsProcessor::kNumParams * 4                 // raw parameter values
+    + kParamsV1 * 4                                 // v1 parameter values (min)
     + kSettingsBytes;
 
 void writeU32 (juce::MemoryOutputStream& mo, uint32_t v) { mo.write (&v, 4); }
@@ -82,7 +86,8 @@ RunsProcessor::RunsProcessor()
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     const char* ids[kNumParams] = { "engine", "beats", "density", "curve",
-                                    "accent", "arc", "tonic", "mode", "walk" };
+                                    "accent", "arc", "tonic", "mode", "walk",
+                                    "overlap" };
     for (int i = 0; i < kNumParams; ++i)
     {
         ranged[i] = dynamic_cast<juce::RangedAudioParameter*> (
@@ -174,6 +179,11 @@ RunsProcessor::createParameterLayout()
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "walk", 1 }, "Walk",
         juce::StringArray { "Fold", "Zig-zag" }, 0));
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "overlap", 1 }, "Overlap", false,
+        juce::AudioParameterBoolAttributes()
+            .withStringFromValueFunction (
+                [] (bool v, int) { return juce::String (v ? "On" : "Off"); })));
     return layout;
 }
 
@@ -185,6 +195,7 @@ void RunsProcessor::prepareToPlay (double newSampleRate, int newSamplesPerBlock)
     // buffers are fixed-capacity members sized at construction.
     pairs.resetAll();
     engine.cancel();
+    for (int c = 0; c < 16; ++c) offHandoff[c] = {};
     inCount = 0;
     outCount = 0;
     runSink.count = 0;
@@ -207,14 +218,14 @@ bool RunsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 float RunsProcessor::realValueMinOf (int paramIndex)
 {
     static constexpr float mins[kNumParams] =
-        { 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f };
+        { 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
     return paramIndex >= 0 && paramIndex < kNumParams ? mins[paramIndex] : 0.0f;
 }
 
 float RunsProcessor::realValueMaxOf (int paramIndex)
 {
     static constexpr float maxs[kNumParams] =
-        { 2.0f, 16.0f, 16.0f, 1.0f, 1.0f, 1.0f, 11.0f, (float) kNumModes, 1.0f };
+        { 2.0f, 16.0f, 16.0f, 1.0f, 1.0f, 1.0f, 11.0f, (float) kNumModes, 1.0f, 1.0f };
     return paramIndex >= 0 && paramIndex < kNumParams ? maxs[paramIndex] : 0.0f;
 }
 
@@ -224,7 +235,20 @@ bool RunsProcessor::paramIsDiscrete (int paramIndex)
         || paramIndex == 1            // beats (int)
         || paramIndex == 6            // tonic (int)
         || paramIndex == 7            // mode (int indexed)
-        || paramIndex == 8;           // walk (choice)
+        || paramIndex == 8            // walk (choice)
+        || paramIndex == kOverlapIndex; // overlap (bool)
+}
+
+void RunsProcessor::markStateDirty()
+{
+    // S7: chunk-only edits (settings dialog, custom tick set) mark the host
+    // state dirty. The non-parameter-changed path is what reaches the
+    // host's dirty flags (VST3 setDirty / CLAP state-mark-dirty). The bare
+    // updateHostDisplay() default flags do NOT set nonParameterStateChanged,
+    // so plain-chunk edits were never dirtying VST3 projects (REAPER report:
+    // "plugin state is not always saved").
+    updateHostDisplay (juce::AudioProcessorListener::ChangeDetails{}
+                          .withNonParameterStateChanged (true));
 }
 
 void RunsProcessor::syncLiveValues()
@@ -461,15 +485,39 @@ void RunsProcessor::emitLatePublish (int channel, int pitch, int velocity,
 
 void RunsProcessor::requestEngineState (int index)
 {
-    // S3.1 GUI three-state switch: queued directly (bypasses the host
-    // parameter; the GUI mirrors the real state via the UI FIFO). The audio
-    // thread dedups identical states.
+    // S3.1 GUI three-state switch: queued directly into the switch queue
+    // (the audio thread applies it before pass 1, D14; REAPER echoing the
+    // host-cached param back must not revert it - see echoGraceBlocks).
+    // Issue report: "selecting Up or Down doesn't mark the project as
+    // modified". The switch now ALSO mirrors into the engine parameter
+    // (same writer as every other GUI edit): the host sees the automation
+    // (performance path marks the edit, project becomes modified) and the
+    // saved chunk carries the real engine state instead of a stale value.
+    // Echo safety: the param now always tracks the real engine state, so a
+    // later host echo of the same value dedups in syncLiveValues /
+    // doEngineChange; the grace window covers intermediate timing.
     if (index < 0 || index > 2)
         return;
     diagEngineListenerHits.store (
         diagEngineListenerHits.load (std::memory_order_relaxed) + 1,
         std::memory_order_relaxed); // count direct GUI pushes too
     engineQueue.push (index);
+    if (auto* p = ranged[kEngineIndex])
+    {
+        if (p->convertFrom0to1 (p->getValue()) != (float) index)
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
+    }
+    updateHostDisplay (juce::AudioProcessorListener::ChangeDetails{}
+                          .withNonParameterStateChanged (true));
+}
+
+int RunsProcessor::engineStateFromCcValue (int value)
+{
+    // S3.1/D13 engine CC ranges: 0-40 Off, 41-79 Up, 80-127 Down. All values
+    // select a state now (nothing is "ignored" any more).
+    if (value < 41) return 0;
+    if (value < 80) return 1;
+    return 2;
 }
 
 void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatNow)
@@ -478,6 +526,7 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
     // and cuts the active run.
     if (newState < 0 || newState > 2 || newState == engineState_)
         return;
+    const bool turningOn = engineState_ == 0; // handoff seed below (S3.3)
     engine.cut (beatNow, runSink);
     runsp::PairOutcome outs[16];
     int flushed = 0;
@@ -487,8 +536,32 @@ void RunsProcessor::doEngineChange (int newState, int sampleOffset, double beatN
                          outs[k].a.velocity, sampleOffset);
     pairs.clearAll(); // state only; latePublishes counter survives (S5.8)
     engineState_ = newState;
+    if (turningOn)
+    {
+        // Engine-off handoff (S3.3): note-ons that passed through while the
+        // engine was Off become the channel's pending note, so the next
+        // note-on starts the run from it. Passed-through pendings never jab
+        // (they already sounded). Stale latches are dropped either way.
+        for (int c = 0; c < 16; ++c)
+        {
+            if (offHandoff[c].held)
+                pairs.seedPassedPending (c, offHandoff[c].pitch,
+                                         offHandoff[c].vel,
+                                         offHandoff[c].beat);
+            offHandoff[c] = {};
+        }
+    }
     diagEngineSwitches.store (diagEngineSwitches.load (std::memory_order_relaxed)
                               + 1, std::memory_order_relaxed);
+    // S11 mirror: switch sources that bypass the GUI parameter (bound engine
+    // CC, keyswitches, program changes) must still keep the engine parameter
+    // in sync so the chunk carries the real state at save time (S7) and the
+    // host is notified (project dirty). The message-thread applier marks it
+    // dirty ONLY when the value actually changes (S11/S13.9). Host-automation
+    // origin: the param already holds this value and the applier skips it.
+    // FIFO overflow is counted in mirrorFifo.dropped (S9 overlay); the next
+    // switch retries.
+    mirrorFifo.push ({ kEngineIndex, (float) newState, true });
     // Host echo guard: param-driven detections in the grace window right
     // after a switch are ignored (see echoGraceBlocks). Scaled to sampleRate.
     echoGraceBlocks.store (juce::jlimit (4, 480,
@@ -528,6 +601,11 @@ void RunsProcessor::mergeEmitAndFlushToHost (juce::MidiBuffer& midi)
 
 void RunsProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
+    // S7: flush pending CC/switch mirrors first so the chunk always carries
+    // the LAST held control value (e.g. a bound-CC tweak with the editor
+    // closed would otherwise save the stale parameter).
+    applyPendingCcMirrors();
+
     destData.setSize (0, true);
     juce::MemoryOutputStream mo (destData, false);
     mo.write (kChunkMagic, 4);
@@ -566,13 +644,16 @@ void RunsProcessor::setStateInformation (const void* data, int sizeInBytes)
     const auto* d = static_cast<const uint8_t*> (data);
     if (std::memcmp (d, kChunkMagic, 4) != 0)
         return; // wrong magic: reject (S7)
-    if (readU32 (d + 4) != kChunkVersion)
+    const uint32_t version = readU32 (d + 4);
+    if (version < kChunkMinVersion || version > kChunkVersion)
         return; // unknown schema: reject, keep current state (S7)
+    // v1: 9 parameters (Overlap defaults); v2: all kNumParams.
+    const int nParams = version >= 2 ? kNumParams : kParamsV1;
     size_t p = 8;
     auto need = [&] (size_t n) { return (int) (p + n) <= sizeInBytes; };
 
-    float params[kNumParams];
-    for (int i = 0; i < kNumParams; ++i)
+    float params[kNumParams] = {};
+    for (int i = 0; i < nParams; ++i)
     {
         if (! need (4)) return;
         params[i] = readF32 (d + p);
@@ -763,7 +844,8 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
                 {
                     isEngineEvent = true;
                     const int v = m.getControllerValue();
-                    if (v <= 2) newState = v; // 0 Off / 1 Up / 2 Down; else ignored
+                    // S3.1/D13 value ranges: 0-40 Off, 41-79 Up, 80-127 Down
+                    newState = RunsProcessor::engineStateFromCcValue (v);
                 }
             }
             else // PC (S3.1): absorbed in every state
@@ -801,6 +883,30 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         const int ch = m.getChannel();     // MIDI channel 1..16 (emissions)
         const int chIdx = m.getChannel() - 1; // PairTracker index (0..15)
 
+        if (m.isNoteOn() && ! engineOn)
+        {
+            // S3.3: passthrough. Engine-off handoff: remember the held
+            // note-on so switching the engine on can pair it (S13 handoff
+            // rule); a later note-off of the same pitch clears the latch.
+            if (chIdx >= 0 && chIdx < 16)
+                offHandoff[chIdx] =
+                    { m.getNoteNumber(), (int) m.getVelocity(),
+                      beatAtSample (blk, it.sample), true };
+            pushOut (it.sample, it.bytes, it.size);
+            continue;
+        }
+
+        if (m.isNoteOff() && ! engineOn)
+        {
+            if (chIdx >= 0 && chIdx < 16)
+            {
+                auto& oh = offHandoff[chIdx];
+                if (oh.held && oh.pitch == m.getNoteNumber()) oh = {};
+            }
+            pushOut (it.sample, it.bytes, it.size);
+            continue;
+        }
+
         if (engineOn && m.isNoteOn())
         {
             const double beat = beatAtSample (blk, it.sample);
@@ -820,7 +926,10 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
                     if (o.pendingBeat >= blk.b0) // buffered inside this block
                         pendSample = juce::jlimit (0, numSamples - 1,
                                                    sampleAtBeat (blk, o.pendingBeat));
-                    pushNoteMsg (true, ch, o.a.pitch, o.a.velocity, pendSample);
+                    // Handoff (S3.3): a passed-through pending already
+                    // sounded; emit only the new note.
+                    if (o.pendPassedSide == -1)
+                        pushNoteMsg (true, ch, o.a.pitch, o.a.velocity, pendSample);
                     pushOut (it.sample, it.bytes, it.size);
                     break;
                 }
@@ -845,8 +954,12 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
                         // S3.2 degenerate after endpoint snapping: the two
                         // notes pass through as ordinary notes; late publish
                         // both (consumption is compensated, S5.8 invariant).
-                        emitLatePublish (ch, o.pitchLo, o.velLo, it.sample);
-                        emitLatePublish (ch, o.pitchHi, o.velHi, it.sample);
+                        // Handoff (S3.3): the passed-through pending side
+                        // already sounded, so only the new side publishes.
+                        if (o.pendPassedSide != 0)
+                            emitLatePublish (ch, o.pitchLo, o.velLo, it.sample);
+                        if (o.pendPassedSide != 1)
+                            emitLatePublish (ch, o.pitchHi, o.velHi, it.sample);
                     }
                     break;
                 }
@@ -989,6 +1102,7 @@ runsp::RunParams RunsProcessor::makeRunParams (
     p.mode = (int) std::lround (juce::jlimit (0.0f, (float) kNumModes, live[7]));
     p.customOffsets = settings.customOffsets;
     p.walk = live[8] >= 0.5f ? runsp::WalkMode::ZigZag : runsp::WalkMode::Fold;
+    p.noteOverlap = live[kOverlapIndex] >= 0.5f; // S5.8 overlap toggle
     p.gateFraction = juce::jlimit (0.0, 1.0, (double) settings.gateFraction);
     // S5.1: epsilon (default 2 ms) converted to beats at the current bpm.
     p.epsilonBeats = juce::jlimit (0.0, 16.0,
