@@ -26,6 +26,28 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-universal --parallel
 
+      # auval is the same check Logic runs before it lists an AU: a component
+      # that fails validation is simply left out of the plug-in menus (this is
+      # how the aumi personality went missing on a user's Mac). Gate the
+      # release on both personalities and keep the full report in the log.
+      - name: Validate Audio Units (auval)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ra="build/mac/RunsAssistant_artefacts/Release"
+          mfx="build/mac/RunsAssistantMFX_artefacts/Release"
+          comps="/Library/Audio/Plug-Ins/Components"
+          sudo mkdir -p "$comps"
+          sudo cp -R "$ra/AU/Runs Assistant.component"    "$comps/"
+          sudo cp -R "$mfx/AU/RunsAssistantMFX.component" "$comps/"
+          # a component copied after the registrar started is invisible to the
+          # AU registry until the registrar restarts
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          status=0
+          auval -v aumf Run1 Runs || status=1
+          auval -v aumi Run2 Runs || status=1
+          exit $status
+
       - name: Stage release
         shell: bash
         run: |
