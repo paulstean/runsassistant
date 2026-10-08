@@ -347,7 +347,7 @@ private:
     runsp::SpscRing<runsp::CcMirrorRequest, 256> mirrorFifo;
 
     int editorWindowW = 960; // RUNV footer values (S7; editor updates in P3)
-    int editorWindowH = 420;
+    int editorWindowH = 480; // S9 default window 960 x 480
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RunsProcessor)
 };

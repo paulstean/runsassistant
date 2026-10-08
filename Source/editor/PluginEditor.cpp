@@ -735,6 +735,25 @@ juce::String noteName (int note)
 constexpr int kExportNoteLo = 24;
 constexpr int kExportNoteHi = 108;
 
+// Shared base tooltip for both endpoint dropdowns; refreshScaleWarning()
+// appends the out-of-scale note to it.
+const char* kEndpointTip =
+    "export endpoint: the two notes the rendered run runs between. The "
+    "lower-to-higher order sets the run direction, and the Start note "
+    "also carries the run's first velocity. Both must fall on different "
+    "scale degrees or no run is produced.";
+
+// Plain (not normalised) read of a ranged parameter - the message-thread view
+// behind the tick grid and the export scale warning.
+float readRangedParam (RunsProcessor& processor, const char* id, float maxV)
+{
+    auto* r = dynamic_cast<juce::RangedAudioParameter*> (
+        processor.apvts.getParameter (id));
+    return r != nullptr ? juce::jlimit (0.0f, maxV,
+                                        r->convertFrom0to1 (r->getValue()))
+                        : 0.0f;
+}
+
 void styleParamRow (RunsEditor::ParamRow& row, const char* name,
                     const char* tooltipText, double lo, double hi,
                     double interval, double defaultValue)
@@ -1021,6 +1040,18 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     // ---- Offline export row (session-only) -------------------------------
     // No attachments: the endpoints and their velocities live in the editor
     // and are dropped with it (they are export inputs, not host state).
+    exportHeader.setText ("Midi Export", juce::dontSendNotification);
+    exportHeader.setColour (juce::Label::textColourId, runui::text());
+    addAndMakeVisible (exportHeader);
+
+    scaleWarning.setColour (juce::Label::textColourId, runui::warn());
+    // No background: the row has to vanish when there is no warning, and a
+    // full-width empty field-colour band would read as a stray strip.
+    scaleWarning.setColour (juce::Label::backgroundColourId,
+                            juce::Colours::transparentBlack);
+    scaleWarning.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (scaleWarning);
+
     fromLabel.setText ("Start", juce::dontSendNotification);
     fromLabel.setColour (juce::Label::textColourId, runui::text());
     targetLabel.setText ("Target", juce::dontSendNotification);
@@ -1036,20 +1067,22 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     fromCombo.setSelectedId (exportFrom + 1, juce::dontSendNotification);
     targetCombo.setSelectedId (exportTarget + 1, juce::dontSendNotification);
     fromCombo.onChange = [this]
-    { exportFrom = juce::jlimit (0, 127, fromCombo.getSelectedId() - 1); };
+    {
+        exportFrom = juce::jlimit (0, 127, fromCombo.getSelectedId() - 1);
+        refreshScaleWarning();
+    };
     targetCombo.onChange = [this]
-    { exportTarget = juce::jlimit (0, 127, targetCombo.getSelectedId() - 1); };
-    const juce::String endpointTip =
-        "export endpoint: the two notes the rendered run runs between. The "
-        "lower-to-higher order sets the run direction, and the Start note "
-        "also carries the run's first velocity. Both must fall on different "
-        "scale degrees or no run is produced.";
-    fromCombo.setTooltip ("Start note of the " + endpointTip);
-    targetCombo.setTooltip ("Target note of the " + endpointTip);
+    {
+        exportTarget = juce::jlimit (0, 127, targetCombo.getSelectedId() - 1);
+        refreshScaleWarning();
+    };
+    fromCombo.setTooltip ("Start note of the " + juce::String (kEndpointTip));
+    targetCombo.setTooltip ("Target note of the " + juce::String (kEndpointTip));
     fromLabel.setTooltip (fromCombo.getTooltip());
     targetLabel.setTooltip (targetCombo.getTooltip());
     addAndMakeVisible (fromCombo);
     addAndMakeVisible (targetCombo);
+    refreshScaleWarning(); // initial tint / tooltip (C4 / C5 vs the scale)
 
     styleParamRow (velFrom, "v",
                    "Velocity of the Start note: the exported run fades "
@@ -1084,6 +1117,12 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     updateReadouts();
 
     // ---- Bottom row (S9) -------------------------------------------------
+    clipboardHeader.setText (
+        "Copy & Paste Settings Between Runs Assistant Instances",
+        juce::dontSendNotification);
+    clipboardHeader.setColour (juce::Label::textColourId, runui::text());
+    addAndMakeVisible (clipboardHeader);
+
     copyButton.setName ("Copy to Clipboard");
     copyButton.setTooltip (
         "Copy the whole state - engine, scale (tonic, mode, ticks), Beats, "
@@ -1116,12 +1155,13 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     addAndMakeVisible (debugToggle);
 
     // ---- Window geometry (S9 + RUNV footer, S7) --------------------------
-    // Min height grew with the offline export row (402 px of content + 16 px
-    // frame): old saved 390 px windows are clamped up by jlimit below.
+    // Min height grew again with the two section headings and the export
+    // out-of-scale warning line (456 px of content + 16 px frame): old saved
+    // 390 / 420 px windows are clamped up by jlimit below.
     int w, h;
     processor.getEditorWindowSize (w, h);
-    setResizeLimits (720, 420, 1400, 600); // S9 resize limits
-    setSize (juce::jlimit (720, 1400, w), juce::jlimit (420, 600, h));
+    setResizeLimits (720, 480, 1400, 600); // S9 resize limits
+    setSize (juce::jlimit (720, 1400, w), juce::jlimit (480, 600, h));
     startTimerHz (20); // engine-state mirror (host/CC writes included)
 }
 
@@ -1160,6 +1200,14 @@ RunsEditor::~RunsEditor()
 void RunsEditor::paint (juce::Graphics& g)
 {
     g.fillAll (runui::bg());
+
+    // Section rules (S9): 1 px hairlines under the curve preview and above
+    // the clipboard heading. Painted here rather than as child components -
+    // both strips are empty, so nothing ever repaints over them piecemeal.
+    g.setColour (runui::edge());
+    for (auto* rule : { &exportRule, &clipboardRule })
+        if (! rule->isEmpty())
+            g.fillRect (rule->getX(), rule->getCentreY(), rule->getWidth(), 1);
 }
 
 // D12: the 12 tick boxes always mirror the current scale. mode < 16: re-tick
@@ -1169,18 +1217,10 @@ void RunsEditor::paint (juce::Graphics& g)
 // re-computes the same set through the parameter listener (idempotent).
 void RunsEditor::refreshScaleTicks (bool keepTicks)
 {
-    auto readParam = [&] (const char* id, float maxV)
-    {
-        auto* r = dynamic_cast<juce::RangedAudioParameter*> (
-            processor.apvts.getParameter (id));
-        return r != nullptr
-                   ? juce::jlimit (0.0f, maxV,
-                                   r->convertFrom0to1 (r->getValue()))
-                   : 0.0f;
-    };
-    const int tonic = (int) std::lround (readParam ("tonic", 11.0f));
-    const int mode =
-        (int) std::lround (readParam ("mode", (float) runsp::kCustomMode));
+    const int tonic =
+        (int) std::lround (readRangedParam (processor, "tonic", 11.0f));
+    const int mode = (int) std::lround (
+        readRangedParam (processor, "mode", (float) runsp::kCustomMode));
 
     uint16_t mask = 0;
     if (keepTicks)
@@ -1206,6 +1246,56 @@ void RunsEditor::refreshScaleTicks (bool keepTicks)
                                        juce::dontSendNotification);
     }
     refreshGuard = false;
+    // Every scale change (tonic, mode, manual ticks, paste) lands here, so
+    // this is the one place the export warning has to re-check.
+    refreshScaleWarning();
+}
+
+// Offline export advisory: the run can only contain scale tones (S5.4), so an
+// endpoint outside the selected tonic/mode/tick set snaps on render (S5.3).
+// Say so up front instead of silently moving the note: red line under the
+// export row, red dropdown text and a tooltip that spells out the snap.
+void RunsEditor::refreshScaleWarning()
+{
+    const int tonic =
+        (int) std::lround (readRangedParam (processor, "tonic", 11.0f));
+    const int mode = (int) std::lround (
+        readRangedParam (processor, "mode", (float) runsp::kCustomMode));
+    const runsp::ScaleModel scale (tonic, mode,
+                                   processor.settings.customOffsets);
+
+    const bool fromIn = scale.inScale (exportFrom % 12);
+    const bool targetIn = scale.inScale (exportTarget % 12);
+
+    juce::String text;
+    if (! fromIn && ! targetIn)
+        text = "Start " + noteName (exportFrom) + " and Target "
+               + noteName (exportTarget) + " are not in the scale";
+    else if (! fromIn)
+        text = "Start " + noteName (exportFrom) + " is not in the scale";
+    else if (! targetIn)
+        text = "Target " + noteName (exportTarget) + " is not in the scale";
+
+    scaleWarning.setText (text, juce::dontSendNotification);
+
+    fromCombo.setColour (juce::ComboBox::textColourId,
+                         fromIn ? runui::text() : runui::warn());
+    targetCombo.setColour (juce::ComboBox::textColourId,
+                           targetIn ? runui::text() : runui::warn());
+
+    const auto tip = [](const char* lead, int note, bool inScale)
+    {
+        return juce::String (lead) + kEndpointTip
+               + (inScale ? juce::String()
+                          : " " + noteName (note)
+                                + " is not in the current scale, so the "
+                                  "rendered run snaps it to the nearest "
+                                  "scale note.");
+    };
+    fromCombo.setTooltip (tip ("Start note of the ", exportFrom, fromIn));
+    targetCombo.setTooltip (tip ("Target note of the ", exportTarget, targetIn));
+    fromLabel.setTooltip (fromCombo.getTooltip());
+    targetLabel.setTooltip (targetCombo.getTooltip());
 }
 
 void RunsEditor::parameterChanged (const juce::String& paramID, float)
@@ -1481,7 +1571,10 @@ void RunsEditor::resized()
         auto cv = area.removeFromTop (100);
         curveView->setBounds (cv.removeFromLeft (100));
     }
-    area.removeFromTop (8);
+    // Section rule + "Midi Export" heading (S9); the hairline itself is
+    // painted by paint().
+    exportRule = area.removeFromTop (8);
+    exportHeader.setBounds (area.removeFromTop (18));
 
     // Offline export row: Start / Target endpoints with their velocities,
     // then the drag affordance. Fixed label/readout/button widths; the two
@@ -1508,14 +1601,21 @@ void RunsEditor::resized()
         r.removeFromLeft (10);
         dragButton->setBounds (r);
     }
-    area.removeFromTop (8);
+    // Out-of-scale warning line: always reserved (18 px) so the layout never
+    // jumps as the endpoints move in or out of the scale.
+    scaleWarning.setBounds (area.removeFromTop (18));
 
-    // Debug overlay strip (S9 bottom row) when toggled on
+    // Debug overlay strip (S9 bottom row) when toggled on. It sits above the
+    // clipboard rule so that rule and its heading stay one section header.
     if (overlayPanel != nullptr)
     {
+        area.removeFromTop (8);
         overlayPanel->setBounds (area.removeFromTop (5 * 18 + 20));
         area.removeFromTop (6);
     }
+
+    clipboardRule = area.removeFromTop (8);
+    clipboardHeader.setBounds (area.removeFromTop (18));
 
     // Bottom row (S9): clipboard preset buttons left, Debug overlay right;
     // the Settings button lives in the header centre.
@@ -1527,4 +1627,9 @@ void RunsEditor::resized()
 
     // RUNV footer (S7): persist the current editor window size.
     processor.recordEditorWindowSize (getWidth(), getHeight());
+
+    // The two section rules live in paint() and their strips hold no child,
+    // so no child's setBounds repaints them (the debug overlay toggle shifts
+    // the lower one without the window itself changing size).
+    repaint();
 }

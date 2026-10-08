@@ -446,7 +446,7 @@ Overlap (bool). Settings and CC bindings are chunk-only, never parameters.
 
 ## 9. UI specification
 
-Default window 960 x 420, resizable within 720 x 420 .. 1400 x 600, DPI-aware,
+Default window 960 x 480, resizable within 720 x 480 .. 1400 x 600, DPI-aware,
 dark theme (Eloquent palette). One graph: the curve shape preview (below).
 No list, no playhead display.
 
@@ -461,8 +461,12 @@ No list, no playhead display.
 | Curve   [==o-------] 22%   Accent [===o-----] 41%    Arc [==o-----] +15%    |
 | Walk: ( ) Fold  (x) Zig-zag   Overlap: [x] On                              |
 | [ curve preview: smooth curve bottom-left to top-right (Up), mirrored for Down ] |
-| Start [C4 v] v[======] 100   Target [C5 v] v[======] 90      [Drag MIDI]   |
 +----------------------------------------------------------------------------+
+| Midi Export                                                                |
+| Start [C4 v] v[======] 100   Target [C5 v] v[======] 90      [Drag MIDI]   |
+| Start C4 and Target C5 are not in the scale  (red; shown only when out)    |
++----------------------------------------------------------------------------+
+| Copy & Paste Settings Between Runs Assistant Instances                     |
 | [Copy to Clipboard] [Paste from Clipboard]               [Debug overlay]   |
 +----------------------------------------------------------------------------+
 ```
@@ -519,6 +523,13 @@ No list, no playhead display.
     any same-beat note-on (5.8 / 6.1 ordering), including overlap runs;
   * an equal pair, or any input the engine refuses, reports a short reason on
     the button instead of rendering (no dialogs, no file).
+  * the row sits under a full-width rule and the heading `Midi Export`. While
+    Start and/or Target lies outside the selected scale (tonic, mode or manual
+    ticks) a red line under the row names the offending note(s), that dropdown
+    turns red and its tooltip spells out the snap. Advisory only: the render
+    still snaps both endpoints inward (5.3) and only refuses when the snapped
+    span collapses (3.2); the warning line keeps its row so the layout never
+    jumps.
   Rendering is message-thread only; file I/O here is allowed (6.2 governs the
   audio thread). Press-and-drag starts the native drag; a plain click only
   flashes a hint.
@@ -538,7 +549,9 @@ No list, no playhead display.
   parameter-notify path (engine through the regular switch path), range-clamps
   every present field like the chunk reader and keeps absent fields; anything
   else is rejected without changing anything. Both actions give short
-  label feedback on the button (Copied / Pasted / reason), no dialogs.
+  label feedback on the button (Copied / Pasted / reason), no dialogs. The row
+  sits under a full-width rule and the heading `Copy & Paste Settings Between
+  Runs Assistant Instances`.
 * **Debug overlay:** engine state, pending note (if any), active run progress
   (last emitted pitch/velocity, notes emitted / n), counters (parity drops,
   late-published singles, cuts), current playhead beat and bpm.

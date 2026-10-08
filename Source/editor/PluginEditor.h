@@ -18,7 +18,10 @@ class MidiDragButton;
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
 //   curve strip: square curve shape preview below the walk row (S9)
+//   rule + "Midi Export" heading
 //   export row:  Start / Target note dropdowns, their velocities, Drag MIDI
+//   scale warn:  red line when Start/Target falls outside the selected scale
+//   rule + "Copy & Paste Settings Between Runs Assistant Instances" heading
 //   bottom row:  Copy / Paste clipboard preset buttons + Debug overlay (S9)
 // Engine / scale / walk / overlap / slider state lives in the APVTS, so host
 // automation and bound-CC mirrors arrive through the attachments (S4/S11);
@@ -59,6 +62,10 @@ private:
 
     void refreshScaleTicks (bool keepTicks);
     void pitchTickChanged (int pitchClass);
+    // Offline export: warns (red line + red dropdown + tooltip) when Start
+    // and/or Target is outside the selected tonic/mode/tick set. Advisory
+    // only - the render still snaps the endpoints inward (S5.3).
+    void refreshScaleWarning();
     void updateReadouts();
     void ensureDialog();
     void toggleOverlay (bool on);
@@ -103,7 +110,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         overlapAttachment;
 
-    // Bottom row
+    // Bottom row + its section heading and the rule above the heading (the
+    // rule itself is painted by the editor, not a child component).
+    juce::Label clipboardHeader;
+    juce::Rectangle<int> clipboardRule;
     juce::TextButton copyButton { "Copy to Clipboard" };
     juce::TextButton pasteButton { "Paste from Clipboard" };
     juce::TextButton settingsButton { "Settings" };
@@ -118,6 +128,11 @@ private:
     std::unique_ptr<MidiDragButton> dragButton;
     int exportFrom = 60;   // C4
     int exportTarget = 72; // C5
+    // "Midi Export" heading + the rule above it (painted by the editor), and
+    // the red warning line under the export row for out-of-scale endpoints.
+    juce::Label exportHeader;
+    juce::Rectangle<int> exportRule;
+    juce::Label scaleWarning;
     // Renders the export and returns its path (empty on failure, where the
     // reason is flashed on the drag button instead).
     juce::String prepareMidiDrag();
