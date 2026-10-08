@@ -5,7 +5,7 @@
 #   libs/clap-juce-extensions       main (pinned at scaffold time)
 # Fresh clone: git submodule update --init --recursive --depth 1
 cmake_minimum_required(VERSION 3.27)
-project(RunsAssistant VERSION 0.1.2 LANGUAGES C CXX)
+project(RunsAssistant VERSION 0.1.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -121,6 +121,17 @@ if (APPLE)
     target_sources(RunsAssistantMFX PRIVATE ${RUNS_CORE_SOURCES})
     target_include_directories(RunsAssistantMFX PRIVATE Source)
     target_link_libraries(RunsAssistantMFX PRIVATE juce::juce_audio_utils)
+    # The aumi personality must report 0 audio inputs to the host: JUCE's AU
+    # wrapper hard-codes AUChannelInfo {0,-1} for kAudioUnitType_MIDIProcessor
+    # (juce_AU_Shared.h getAUChannelInfo). If the shared processor keeps its
+    # stereo input bus, auval compares a 2-in default format against that 0-in
+    # report and fails the component ("Default Format of unit does not match
+    # reported Channel handling capabilities") - a failed auval is exactly what
+    # makes Logic leave the component out of the MIDI FX menu. The MIDI FX slot
+    # carries no audio, so the input bus is dropped for this target only
+    # (specification.md S2: "at most one silent audio passthrough bus where the
+    # format demands one").
+    target_compile_definitions(RunsAssistantMFX PRIVATE RUNS_NO_AUDIO_INPUT=1)
     target_compile_definitions(RunsAssistantMFX PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0

@@ -97,10 +97,21 @@ int16_t readI16 (const uint8_t* d)
 int clampByte (int v) { return juce::jlimit (0, 127, v); }
 } // namespace
 
+// Bus layout per personality (specification.md S2: MIDI-only with at most one
+// silent passthrough bus where the format demands one). RUNS_NO_AUDIO_INPUT is
+// set for the aumi target (see CMakeLists.txt): kAudioUnitType_MIDIProcessor
+// reports 0 audio input channels to the host, so a contradicting stereo input
+// bus makes auval reject the component and Logic hides it from the MIDI FX
+// menu. The MIDI FX slot carries no audio at all.
 RunsProcessor::RunsProcessor()
     : AudioProcessor (BusesProperties()
+   #if defined(RUNS_NO_AUDIO_INPUT)
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-        .withInput ("Input", juce::AudioChannelSet::stereo(), true)),
+   #else
+        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+        .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+   #endif
+      ),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     for (int i = 0; i < kNumParams; ++i)
@@ -241,10 +252,16 @@ void RunsProcessor::prepareToPlay (double newSampleRate, int newSamplesPerBlock)
 
 bool RunsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return (layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
-            && layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo())
-           || (layouts.getMainInputChannelSet().isDisabled()
-               && layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo());
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    // RUNS_NO_AUDIO_INPUT builds (aumi) declare no input bus at all:
+    // getMainInputChannelSet() indexes inputBuses[0], so test emptiness first.
+    if (layouts.inputBuses.isEmpty())
+        return true;
+
+    return layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo()
+        || layouts.getMainInputChannelSet().isDisabled();
 }
 
 // --------------------------------------------------------------------------
