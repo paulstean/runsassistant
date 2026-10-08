@@ -104,6 +104,11 @@ public:
         stub.advance (bpb); // S5.1: continuous ppq while playing
     }
 
+    // Reference overload: never take the address of a returned temporary
+    // (clang -Waddress-of-temporary is an error on the mac build; the
+    // temporary would only live for the full-expression anyway).
+    void step (const juce::MidiBuffer& input) { step (&input); }
+
     void run (const juce::MidiBuffer& input, int emptyBlocks)
     {
         step (&input);
@@ -1302,14 +1307,14 @@ void testEngineOffHandoffPairFiresAtSecondNoteOn()
     }), 2);
     CHECK (hasEventAt (r.out, 0, 0, true, 60));
     // (2) CC87 Up (range 41-79) while the note is still held: pending seeds
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::controllerEvent (1, 87, 50) },
     }));
     CHECK_EQ ((int) p.publishedEngineState.load(), 1);
     // (3) second note-on completes the pair: run fires from it (both note-ons
     // consumed - no immediate passthrough of 64)
     const size_t prev = r.out.size();
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 110) },
     }));
     for (const auto& e : r.out) // nothing at/beyond prev refers to pitch 64
@@ -1338,7 +1343,7 @@ void testEngineOffHandoffPairFiresAtSecondNoteOn()
     // The final (target) run note is closed by the switch itself, nothing
     // is jabbed.
     const size_t prev2 = r.out.size();
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::controllerEvent (1, 87, 0) },
     }));
     CHECK_EQ ((int) p.publishedEngineState.load(), 0);
@@ -1351,7 +1356,7 @@ void testEngineOffHandoffPairFiresAtSecondNoteOn()
     CHECK (sawOffInSwitchBlock);
     // (5) trigger offs afterwards pass through (engine Off, S3.3)
     const size_t prev3 = r.out.size();
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
     }));
     CHECK (r.out.size() == prev3 + 1);
@@ -1368,17 +1373,17 @@ void testEngineOffHandoffSwitchOffWithoutSecondNote()
     r.run (bufferOf ({
         { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
     }), 1);
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::controllerEvent (1, 87, 50) },
     }));
     CHECK_EQ ((int) p.publishedEngineState.load(), 1);
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::controllerEvent (1, 87, 0) },
     }));
     CHECK_EQ ((int) p.publishedEngineState.load(), 0);
     r.runEmpty (3);
     CHECK_EQ (p.latestUiState().latePublishes, 0);
-    r.step (&bufferOf ({
+    r.step (bufferOf ({
         { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
     }));
     CHECK (r.out.back().msg.isNoteOff()
@@ -1454,7 +1459,7 @@ void testHumanizeSeedResolution()
     };
     auto fireRun = [] (RunsProcessor& p, Runner& r)
     {
-        r.step (&bufferOf ({
+        r.step (bufferOf ({
             { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
             { 0, juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100) },
         }));
@@ -1463,7 +1468,7 @@ void testHumanizeSeedResolution()
     };
     auto releaseTriggers = [] (Runner& r)
     {
-        r.step (&bufferOf ({
+        r.step (bufferOf ({
             { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
             { 0, juce::MidiMessage::noteOff (1, 72, (juce::uint8) 0) },
         }));
