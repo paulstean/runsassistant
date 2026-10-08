@@ -1,6 +1,10 @@
-# Runs Assistant - manual macOS universal build (VST3 / AU / CLAP / Standalone).
+# Runs Assistant - manual macOS universal build (VST3 / AU / CLAP).
 # Runs only on demand: Actions tab -> "Mac Build (manual)" -> Run workflow,
 # or: gh workflow run mac.yml --ref main
+# Stages the same payload as tools/make-release.ps1 (Windows): plug-in
+# bundles + UserManual.html + RELEASE_NOTES.md + README.md + LICENSE, plus
+# the AU personalities (aumf + aumi) which only exist on macOS. Standalone
+# is dev-only and stays out of the zip.
 name: Mac Build (manual)
 
 on:
@@ -22,22 +26,40 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-universal --parallel
 
-      - name: Stage artefacts
+      - name: Stage release
         shell: bash
         run: |
-          mkdir -p bundle
-          for t in RunsAssistant RunsAssistantMFX; do
-            base="build/mac/${t}_artefacts/Release"
-            cp -R "$base/AU"            "bundle/${t}-AU" 2>/dev/null || true
-            cp -R "$base/VST3"          "bundle/${t}-VST3" 2>/dev/null || true
-            cp -R "$base/CLAP"          "bundle/${t}-CLAP" 2>/dev/null || true
-            cp -R "$base/Standalone"    "bundle/${t}-Standalone" 2>/dev/null || true
-          done
-          ls -R bundle
+          set -euo pipefail
+          mkdir -p release
+          ra="build/mac/RunsAssistant_artefacts/Release"
+          mfx="build/mac/RunsAssistantMFX_artefacts/Release"
+          # AU is the point of the mac build: hard-require both personalities.
+          cp -R "$ra/AU/Runs Assistant.component"    release/
+          cp -R "$mfx/AU/RunsAssistantMFX.component" release/
+          # VST3 + CLAP parity with the Windows zip.
+          cp -R "$ra/VST3/Runs Assistant.vst3"  release/
+          cp -R "$ra/CLAP/Runs Assistant.clap"  release/
+          # MFX CLAP only exists when clap-juce-extensions wraps it.
+          if [ -e "$mfx/CLAP/RunsAssistantMFX.clap" ]; then
+            cp -R "$mfx/CLAP/RunsAssistantMFX.clap" release/
+          fi
+          # Same docs payload as tools/make-release.ps1.
+          cp README.md RELEASE_NOTES.md LICENSE release/
+          cp docs/UserManual.html release/UserManual.html
+          ls -R release
+
+      - name: Package zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^project(RunsAssistant VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)
+          test -n "$ver"
+          (cd release && zip -qry "../RunsAssistant-$ver-mac-universal.zip" .)
+          ls -l RunsAssistant-*.zip
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: RunsAssistant-mac-universal
-          path: bundle/
+          path: RunsAssistant-*.zip
           if-no-files-found: error
