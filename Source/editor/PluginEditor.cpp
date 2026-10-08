@@ -754,6 +754,16 @@ float readRangedParam (RunsProcessor& processor, const char* id, float maxV)
                         : 0.0f;
 }
 
+// Bound-CC badge (S4/S9): smaller and same dim tone as the readout, filled
+// in by updateCcBadges() (text + tooltip follow the live binding).
+void styleCcBadge (juce::Label& l)
+{
+    runui::setFontHeight (l, 10.0f);
+    l.setColour (juce::Label::textColourId, runui::dim());
+    l.setJustificationType (juce::Justification::centredLeft);
+    l.setMinimumHorizontalScale (0.8f);
+}
+
 void styleParamRow (RunsEditor::ParamRow& row, const char* name,
                     const char* tooltipText, double lo, double hi,
                     double interval, double defaultValue)
@@ -769,6 +779,7 @@ void styleParamRow (RunsEditor::ParamRow& row, const char* name,
     row.readout.setTooltip (tooltipText);
     row.readout.setColour (juce::Label::textColourId, runui::dim());
     row.readout.setJustificationType (juce::Justification::centredLeft);
+    styleCcBadge (row.cc);
 }
 } // namespace
 
@@ -866,6 +877,11 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         engineButtons[i].setName ("Engine " + juce::String (engTip[i][0]));
         engineButtons[i].onClick = [this, i] { processor.requestEngineState (i); };
     }
+    // Bound-CC badge left of the buttons (filled by updateCcBadges; only
+    // meaningful when the engine source is CC, S3.1).
+    styleCcBadge (engineCc);
+    engineCc.setText ("cc:--", juce::dontSendNotification);
+    addAndMakeVisible (engineCc);
     timerCallback(); // initial visual sync from the current engine state
 
     // ---- Scale rows (S9 / D12) ------------------------------------------
@@ -874,6 +890,8 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     for (int i = 0; i < 12; ++i)
         tonicCombo.addItem (kPitchNames[i], i + 1);
     addAndMakeVisible (tonicCombo);
+    styleCcBadge (tonicCc);
+    addAndMakeVisible (tonicCc);
 
     modeLabel.setText ("Mode", juce::dontSendNotification);
     modeLabel.setColour (juce::Label::textColourId, runui::text());
@@ -886,6 +904,8 @@ RunsEditor::RunsEditor (RunsProcessor& p)
                                : juce::String ("Custom"),
                            m + 1);
     addAndMakeVisible (modeCombo);
+    styleCcBadge (modeCc);
+    addAndMakeVisible (modeCc);
 
     tonicCombo.onChange = [this] { refreshScaleTicks (false); };
     modeCombo.onChange = [this] { refreshScaleTicks (false); };
@@ -956,6 +976,7 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         addAndMakeVisible (sliderRows[i]->name);
         addAndMakeVisible (sliderRows[i]->slider);
         addAndMakeVisible (sliderRows[i]->readout);
+        addAndMakeVisible (sliderRows[i]->cc);
         sliderRows[i]->attachment =
             std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
                 processor.apvts, sliderIds[i], sliderRows[i]->slider);
@@ -977,6 +998,8 @@ RunsEditor::RunsEditor (RunsProcessor& p)
     walkLabel.setText ("Walk", juce::dontSendNotification);
     walkLabel.setColour (juce::Label::textColourId, runui::text());
     addAndMakeVisible (walkLabel);
+    styleCcBadge (walkCc);
+    addAndMakeVisible (walkCc);
     foldButton.setRadioGroupId (2);
     zigzagButton.setRadioGroupId (2);
     runui::setToggleShape (foldButton, 2);
@@ -1186,6 +1209,11 @@ void RunsEditor::timerCallback()
         refreshGuard = false;
         updateReadouts(); // curve preview flips with Up / Down
     }
+
+    // Bound-CC badges poll too: the settings struct has no change listener,
+    // so this is what picks up Settings-dialog edits, chunk loads, pastes
+    // and resets (cheap: cached no-op unless a binding or value moved).
+    updateCcBadges();
 }
 
 RunsEditor::~RunsEditor()
@@ -1453,6 +1481,88 @@ void RunsEditor::updateReadouts()
         juce::String (juce::roundToInt (
             juce::jlimit (1.0, 127.0, velTo.slider.getValue()))),
         juce::dontSendNotification);
+    updateCcBadges();
+}
+
+void RunsEditor::updateCcBadges()
+{
+    // Bound-CC badges (S4/S9): "ccNN:VV" beside every CC-mapped control,
+    // VV = the CC value that reproduces the current setting (the processor's
+    // inverse of the applyBoundCc map), "cc:--" when unbound / the engine
+    // source is not CC. Runs at 20 Hz from timerCallback() - settings are a
+    // plain struct with no change listener, so polling is what catches
+    // Settings-dialog edits, chunk loads, pastes and resets; only a text
+    // change writes to the label (and its tooltip), so the idle cost is a
+    // handful of string compares.
+    auto setBadge = [this] (juce::Label& l, int cacheIndex,
+                            const juce::String& text, const juce::String& tip)
+    {
+        if (ccTextCache[cacheIndex] == text)
+            return;
+        ccTextCache[cacheIndex] = text;
+        l.setText (text, juce::dontSendNotification);
+        l.setTooltip (tip);
+    };
+    auto bindingTip = [] (const char* what, int cc, const juce::String& value)
+    {
+        if (cc == kCcNone)
+            return juce::String (what)
+                 + " has no CC bound (set it in Settings).";
+        return juce::String (what) + " is bound to CC " + juce::String (cc)
+             + "; send that CC with value " + value
+             + " to reproduce the current value.";
+    };
+
+    const auto& s = processor.settings;
+    ParamRow* sliderRows[5] = { &beats, &density, &curve, &accent, &arc };
+    const char* sliderNames[5] = { "Beats", "Density", "Curve",
+                                   "Accent", "Arc" };
+    for (int i = 0; i < 5; ++i)
+    {
+        const int cc = s.boundCC[i];
+        const int val = processor.ccValueForBinding (
+            i, (float) sliderRows[i]->slider.getValue());
+        const juce::String value = juce::String (val);
+        const juce::String text = cc == kCcNone
+                                    ? juce::String ("cc:--")
+                                    : "cc" + juce::String (cc) + ":" + value;
+        setBadge (sliderRows[i]->cc, i, text,
+                  bindingTip (sliderNames[i], cc, value));
+    }
+
+    const char* names[3] = { "Tonic", "Mode", "Walk" };
+    const float values[3] = {
+        readRangedParam (processor, "tonic", 11.0f),
+        readRangedParam (processor, "mode", (float) runsp::kCustomMode),
+        readRangedParam (processor, "walk", 1.0f)
+    };
+    juce::Label* comboLabels[3] = { &tonicCc, &modeCc, &walkCc };
+    for (int b = 0; b < 3; ++b)
+    {
+        const int cc = s.boundCC[b + 5];
+        const int val = processor.ccValueForBinding (b + 5, values[b]);
+        const juce::String value = juce::String (val);
+        const juce::String text = cc == kCcNone
+                                    ? juce::String ("cc:--")
+                                    : "cc" + juce::String (cc) + ":" + value;
+        setBadge (*comboLabels[b], 5 + b, text,
+                  bindingTip (names[b], cc, value));
+    }
+
+    // Engine: only CC-controlled when the engine source is CC (S3.1); the
+    // value shown reproduces the state the buttons mirror.
+    const bool engineIsCc = s.engineSourceType == 1;
+    const int engineVal = processor.ccValueForEngineState (
+        juce::jlimit (0, 2, engineButtonState));
+    const juce::String engineValue = juce::String (engineVal);
+    const juce::String engineText = engineIsCc
+        ? "cc" + juce::String (s.engineNumber) + ":" + engineValue
+        : juce::String ("cc:--");
+    setBadge (engineCc, 8, engineText,
+              engineIsCc
+                  ? bindingTip ("Engine", s.engineNumber, engineValue)
+                  : juce::String ("Engine is not CC-controlled; its source "
+                                  "is set to Notes or PC (Settings)."));
 }
 
 void RunsEditor::ensureDialog()
@@ -1496,6 +1606,7 @@ void RunsEditor::resized()
     // Title + engine row (S9): title left, Settings centre, engine right
     auto top = area.removeFromTop (28);
     title.setBounds (top.removeFromLeft (200));
+    engineCc.setBounds (top.removeFromRight (60)); // just left of the buttons
     auto engArea = top.removeFromRight (240);
     for (int i = 0; i < 3; ++i)
         engineButtons[i].setBounds (engArea.removeFromLeft (80).reduced (2, 2));
@@ -1512,9 +1623,11 @@ void RunsEditor::resized()
     auto comboRow = scalePanel.removeFromTop (26).reduced (0, 3);
     tonicLabel.setBounds (comboRow.removeFromLeft (52));
     tonicCombo.setBounds (comboRow.removeFromLeft (100));
+    tonicCc.setBounds (comboRow.removeFromLeft (56));
     comboRow.removeFromLeft (16);
     modeLabel.setBounds (comboRow.removeFromLeft (52));
     modeCombo.setBounds (comboRow.removeFromLeft (280));
+    modeCc.setBounds (comboRow.removeFromLeft (56));
     scalePanel.removeFromTop (2);
     {
         auto tickRow = scalePanel.removeFromTop (26);
@@ -1525,33 +1638,49 @@ void RunsEditor::resized()
 
     area.removeFromTop (8);
 
-    // Parameter rows (S9)
+    // Parameter rows (S9): name | slider | readout | bound-CC badge, two per
+    // row on the first line, three on the second. Fixed badge/readout/name
+    // slots; the sliders share what is left, so the row still fits the
+    // 720 px minimum width.
     auto paramArea = area.removeFromTop (100);
     if (true)
     {
         auto r = paramArea.removeFromTop (28);
+        const int fixed = 56 + 64 + 56 + 12 + 60 + 84 + 56;
+        const int sliderW = (r.getWidth() - fixed) / 2;
         beats.name.setBounds (r.removeFromLeft (56));
-        beats.slider.setBounds (r.removeFromLeft (r.getWidth() / 2 - 200));
-        beats.readout.setBounds (r.removeFromLeft (70));
-        r.removeFromLeft (16);
-        density.name.setBounds (r.removeFromLeft (64));
-        density.slider.setBounds (r.removeFromLeft (r.getWidth() - 100));
-        density.readout.setBounds (r);
+        beats.slider.setBounds (r.removeFromLeft (sliderW));
+        beats.readout.setBounds (r.removeFromLeft (64));
+        beats.cc.setBounds (r.removeFromLeft (56));
+        r.removeFromLeft (12);
+        density.name.setBounds (r.removeFromLeft (60));
+        density.slider.setBounds (r.removeFromLeft (
+            r.getWidth() - 84 - 56));
+        density.readout.setBounds (r.removeFromLeft (84));
+        density.cc.setBounds (r.removeFromLeft (56));
     }
     paramArea.removeFromTop (2);
     {
         auto r = paramArea.removeFromTop (28);
-        curve.name.setBounds (r.removeFromLeft (56));
-        curve.slider.setBounds (r.removeFromLeft (140));
-        curve.readout.setBounds (r.removeFromLeft (60));
-        r.removeFromLeft (16);
-        accent.name.setBounds (r.removeFromLeft (64));
-        accent.slider.setBounds (r.removeFromLeft (140));
-        accent.readout.setBounds (r.removeFromLeft (60));
-        r.removeFromLeft (16);
-        arc.name.setBounds (r.removeFromLeft (40));
-        arc.slider.setBounds (r.removeFromLeft (r.getWidth() - 70));
-        arc.readout.setBounds (r);
+        const int fixed = 40 + 40 + 56 + 12 + 48 + 40 + 56 + 12 + 32 + 40
+                        + 56;
+        const int sliderW = (r.getWidth() - fixed) / 3;
+        curve.name.setBounds (r.removeFromLeft (40));
+        curve.slider.setBounds (r.removeFromLeft (sliderW));
+        curve.readout.setBounds (r.removeFromLeft (40));
+        curve.cc.setBounds (r.removeFromLeft (56));
+        r.removeFromLeft (12);
+        accent.name.setBounds (r.removeFromLeft (48));
+        accent.slider.setBounds (r.removeFromLeft (sliderW));
+        accent.readout.setBounds (r.removeFromLeft (40));
+        accent.cc.setBounds (r.removeFromLeft (56));
+        r.removeFromLeft (12);
+        arc.name.setBounds (r.removeFromLeft (32));
+        // whatever the two equal sliders left over goes to Arc's slider
+        arc.slider.setBounds (r.removeFromLeft (
+            r.getWidth() - 40 - 56));
+        arc.readout.setBounds (r.removeFromLeft (40));
+        arc.cc.setBounds (r.removeFromLeft (56));
     }
     paramArea.removeFromTop (2);
     {
@@ -1559,6 +1688,7 @@ void RunsEditor::resized()
         walkLabel.setBounds (r.removeFromLeft (56));
         foldButton.setBounds (r.removeFromLeft (96).reduced (2, 2));
         zigzagButton.setBounds (r.removeFromLeft (116).reduced (2, 2));
+        walkCc.setBounds (r.removeFromLeft (56));
         r.removeFromLeft (16);
         overlapLabel.setBounds (r.removeFromLeft (64));
         overlapButton.setBounds (r.removeFromLeft (140).reduced (2, 2));

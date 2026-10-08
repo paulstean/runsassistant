@@ -16,6 +16,7 @@ class MidiDragButton;
 //   title row:   title + Settings button + engine Off/Up/Down toggles
 //   scale row:   tonic combo, mode combo (17 entries), 12 pitch-class ticks
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
+//                and a "ccNN:VV" bound-CC badge on every CC-mapped control
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
 //   curve strip: square curve shape preview below the walk row (S9)
 //   rule + "Midi Export" heading
@@ -45,6 +46,8 @@ public:
         juce::Label name;
         juce::Slider slider;
         juce::Label readout;
+        // Bound-CC badge right of the readout: "cc88:29" or "cc:--" (none).
+        juce::Label cc;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
             attachment;
     };
@@ -67,6 +70,12 @@ private:
     // only - the render still snaps the endpoints inward (S5.3).
     void refreshScaleWarning();
     void updateReadouts();
+    // Bound-CC badges (S4/S9): "ccNN:VV" beside every CC-mapped control -
+    // VV = the CC value reproducing the current setting (processor inverse
+    // of the applyBoundCc map), "cc:--" when unbound / not CC-controlled.
+    // Refreshed from the 20 Hz timer (settings have no change listener) and
+    // from updateReadouts() for instant feedback while dragging.
+    void updateCcBadges();
     void ensureDialog();
     void toggleOverlay (bool on);
     // Clipboard preset (S9): JSON text <-> system clipboard
@@ -87,9 +96,14 @@ private:
     juce::Label title;
     juce::ToggleButton engineButtons[3];
     int engineButtonState = -1; // mirrors publishedEngineState; -1 unsynced
+    // Bound-CC badge left of the engine buttons (cc87:60 / cc:-- unless the
+    // engine source is CC).
+    juce::Label engineCc;
 
     // Scale rows
     juce::Label tonicLabel, modeLabel;
+    // Bound-CC badges right of the two combos.
+    juce::Label tonicCc, modeCc;
     juce::ComboBox tonicCombo, modeCombo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
         tonicAttachment, modeAttachment;
@@ -98,9 +112,15 @@ private:
 
     // Parameter sliders + readouts
     ParamRow beats, density, curve, accent, arc;
+    // Last badge text per label (updateCcBadges only writes on change; the
+    // badges refresh at 20 Hz). Index order: 0..4 beats..arc, 5 tonic,
+    // 6 mode, 7 walk, 8 engine.
+    juce::String ccTextCache[9];
 
     // Walk radios + overlap (legato) toggle
     juce::Label walkLabel;
+    // Bound-CC badge right of the Fold / Zig-zag radios.
+    juce::Label walkCc;
     juce::ToggleButton foldButton { "Fold" };
     juce::ToggleButton zigzagButton { "Zig-zag" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>

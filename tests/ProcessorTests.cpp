@@ -676,6 +676,71 @@ void testCcMappingAndAbsorption()
     CHECK_EQ (paramReal (p3, "walk"), 0.0f);
 }
 
+// Exact replica of RunsProcessor::applyBoundCc's CC -> real map (bindings
+// 0..7, GUI order beats..walk), including the discrete clamp - the forward
+// direction ccValueForBinding is checked against. kModeCcSteps = 17.
+float forwardCcMap (int binding, int ccValue)
+{
+    const int paramIndex = binding + 1;
+    const double c = (double) ccValue;
+    float real = 0.0f;
+    switch (binding)
+    {
+        case 0:  real = (float) juce::jlimit (1, 16, (int) std::lround (
+                          1.0 + c / 127.0 * 15.0)); break;
+        case 1:  real = (float) (1.0 + c / 127.0 * 15.0); break;
+        case 2:  real = (float) (c / 127.0); break;
+        case 3:  real = (float) (c / 127.0); break;
+        case 4:  real = (float) (c / 127.0 * 2.0 - 1.0); break;
+        case 5:  real = (float) ((ccValue * 12) / 128); break;
+        case 6:  real = (float) ((ccValue * 17) / 128); break;
+        case 7:  real = ccValue < 64 ? 0.0f : 1.0f; break;
+        default: return 0.0f;
+    }
+    if (RunsProcessor::paramIsDiscrete (paramIndex))
+        real = (float) juce::jlimit (
+            (int) RunsProcessor::realValueMinOf (paramIndex),
+            (int) RunsProcessor::realValueMaxOf (paramIndex),
+            (int) std::lround (real));
+    else
+        real = juce::jlimit (RunsProcessor::realValueMinOf (paramIndex),
+                             RunsProcessor::realValueMaxOf (paramIndex),
+                             real);
+    return real;
+}
+
+void testCcValueInverse()
+{
+    // The editor's CC badges show ccValueForBinding: for every CC value, the
+    // badge value must map forward to the SAME real value (the badge always
+    // reproduces the current setting).
+    RunsProcessor p;
+    for (int b = 0; b < 8; ++b)
+        for (int cc = 0; cc <= 127; ++cc)
+        {
+            const float v = forwardCcMap (b, cc);
+            const int back = p.ccValueForBinding (b, v);
+            CHECK (back >= 0 && back <= 127);
+            if (RunsProcessor::paramIsDiscrete (b + 1))
+                CHECK_EQ (forwardCcMap (b, back), v);
+            else
+                CHECK_NEAR (forwardCcMap (b, back), v, 1e-3);
+        }
+
+    // Out-of-range input clamps into the parameter range, bad bindings -> -1.
+    CHECK_EQ (p.ccValueForBinding (0, 99.0f), 127);  // Beats above max
+    CHECK_EQ (p.ccValueForBinding (0, -5.0f), 0);    // Beats below min
+    CHECK_EQ (p.ccValueForBinding (-1, 0.5f), -1);
+    CHECK_EQ (p.ccValueForBinding (8, 0.5f), -1);
+
+    // Engine badge values land in their own S3.1 buckets (0-40 / 41-79 /
+    // 80-127), so each one round-trips back to its state.
+    for (int s = 0; s <= 2; ++s)
+        CHECK_EQ (RunsProcessor::engineStateFromCcValue (
+                      RunsProcessor::ccValueForEngineState (s)),
+                  s);
+}
+
 void tuneChunkDefaults (RunsProcessor& p)
 {
     setEngine (p, 2); // Down
@@ -1412,6 +1477,7 @@ int main()
     testLoopWrapCut();
     testKeyswitchStopAndPassthrough();
     testCcMappingAndAbsorption();
+    testCcValueInverse();
     testChunkRoundTrip();
     testChunkTruncatedRejected();
     testChunkTrailingGarbageIgnored();

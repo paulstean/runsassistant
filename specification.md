@@ -161,6 +161,12 @@ range. Tonic: floor(CC x 12 / 128). Mode: floor(CC x nmodes / 128). Walk: 0..63 
 Fold, 64..127 = Zig-zag. Engine switch keeps its dedicated mapping (source table in
 3.1).
 
+The panel shows a `ccNN:VV` badge beside every CC-mapped control (and beside the
+engine buttons when the engine source is CC): NN is the bound CC number and VV the
+CC value in the middle of the bucket of values that reproduce the control's current
+value; a control with no binding, or the engine in Notes/PC source mode, shows
+`cc:--`.
+
 Discrete parameters (tonic, mode, walk) also update from their GUI controls at any
 time; direction of mirroring is always last-writer-wins between GUI, host
 automation, and bound CCs, with no echo back onto the MIDI stream.

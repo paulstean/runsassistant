@@ -40,6 +40,14 @@ inline int toggleShape (const juce::ToggleButton& b)
     return b.getProperties().getWithDefault ("toggleShape", 0);
 }
 
+// Per-label font size opt-in for RunsLookAndFeel::getLabelFont: labels use
+// the 13 px house size unless this property is set (the CC badges render at
+// 10 px so they recede behind the value readouts).
+inline void setFontHeight (juce::Label& l, float size)
+{
+    l.getProperties().set ("fontHeight", size);
+}
+
 class RunsLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -101,7 +109,12 @@ public:
         return font (13.0f);
     }
 
-    juce::Font getLabelFont (juce::Label&) override { return font (13.0f); }
+    juce::Font getLabelFont (juce::Label& l) override
+    {
+        if (auto* h = l.getProperties().getVarPointer ("fontHeight"))
+            return font ((float) *h);
+        return font (13.0f);
+    }
 
     juce::Font getComboBoxFont (juce::ComboBox&) override
     {

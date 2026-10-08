@@ -225,6 +225,15 @@ public:
     // it): 0-40 = Off, 41-79 = Up, 80-127 = Down.
     static int engineStateFromCcValue (int value);
 
+    // Inverse of applyBoundCc, for the editor CC badges: the CC value
+    // (0..127) that reproduces realValue on binding 0..7 - the middle of the
+    // bucket of CC values that map to it (nearest sample for the continuous
+    // maps); -1 for an invalid binding. Tests round-trip both directions.
+    int ccValueForBinding (int binding, float realValue) const;
+    // Inverse of engineStateFromCcValue: middle of each S3.1 bucket
+    // (0-40 Off, 41-79 Up, 80-127 Down).
+    static int ccValueForEngineState (int engineState);
+
     // S7: mark the host state dirty (VST3 dirty flag / CLAP state-mark-dirty
     // through the non-parameter-changed path) for chunk-only edits.
     void markStateDirty();

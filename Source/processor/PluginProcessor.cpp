@@ -340,6 +340,58 @@ void RunsProcessor::applyBoundCc (int ccNumber, int ccValue, int sampleOffset)
     juce::ignoreUnused (sampleOffset);
 }
 
+int RunsProcessor::ccValueForBinding (int binding, float realValue) const
+{
+    // Inverse of applyBoundCc (the editor's CC badges show this number):
+    // returns the CC value in the MIDDLE of the 0..127 bucket that
+    // reproduces realValue - the bucket centre for the rounded/floor/threshold
+    // maps, the nearest sample for the linear ones. Keep in sync with
+    // applyBoundCc; tests/ProcessorTests.cpp testCcValueInverse round-trips
+    // the two against each other.
+    if (binding < 0 || binding >= 8)
+        return -1;
+    const int paramIndex = binding + 1; // GUI order: beats..walk (D13)
+    const float v = juce::jlimit (realValueMinOf (paramIndex),
+                                  realValueMaxOf (paramIndex), realValue);
+    int cc = 0;
+    switch (binding)
+    {
+        case 0:  // Beats 1..16 <- jlimit(1,16, round(1 + c*15/127))
+        case 1:  // Density 1..16 <- 1 + c*15/127
+            cc = juce::roundToInt ((v - 1.0f) * 127.0f / 15.0f);
+            break;
+        case 2:  // Curve 0..1 <- c/127
+        case 3:  // Accent 0..1 <- c/127
+            cc = juce::roundToInt (v * 127.0f);
+            break;
+        case 4:  // Arc -1..+1 <- c/127*2 - 1
+            cc = juce::roundToInt ((v + 1.0f) * 127.0f / 2.0f);
+            break;
+        case 5:  // Tonic t <- floor(c*12/128) (D13): bucket centre
+            cc = juce::roundToInt ((v + 0.5f) * 128.0f / 12.0f - 0.5f);
+            break;
+        case 6:  // Mode m <- floor(c*17/128) (D13): bucket centre
+            cc = juce::roundToInt ((v + 0.5f) * 128.0f / (float) kModeCcSteps
+                                   - 0.5f);
+            break;
+        default: // Walk: 0..63 Fold, 64..127 Zig-zag (D13) - bucket centres
+            cc = v < 0.5f ? 32 : 96; // round(31.5) / round(95.5)
+            break;
+    }
+    return juce::jlimit (0, 127, cc);
+}
+
+int RunsProcessor::ccValueForEngineState (int engineState)
+{
+    // Inverse of engineStateFromCcValue: the middle of each S3.1 bucket.
+    switch (juce::jlimit (0, 2, engineState))
+    {
+        case 1:  return 60;   // Up   (41..79)
+        case 2:  return 104;  // Down (80..127)
+        default: return 20;   // Off  (0..40)
+    }
+}
+
 void RunsProcessor::applyPendingCcMirrors()
 {
     // S11 mitigation: CC edits dirty the parameter like GUI edits, but only
