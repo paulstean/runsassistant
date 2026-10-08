@@ -162,8 +162,16 @@ instruments, harp/guitar glissando-style lines that stay in key and on the beat.
   <span class="t">macOS: unsigned builds</span>
   The release zips are ad-hoc signed only (no Developer-ID signature or notarisation).
   If macOS refuses to load a bundle, clear the quarantine attribute, e.g.
-  <code>xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/</code> (plus any
-  user-level plug-in folder you copied to), then rescan in your DAW.
+  <code>sudo xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/</code> (plus any
+  user-level plug-in folder you copied to), then force a rescan: quit Logic, run
+  <code>killall -9 AudioComponentRegistrar</code> and delete
+  <code>~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache</code> (or use
+  Plug-in Manager &rarr; Reset &amp; Rescan All), then start it again - macOS keeps
+  the result of an earlier failed scan, so clearing quarantine on its own is not
+  enough. <code>auval -v aumf Run1 Runs</code> / <code>auval -v aumi Run2 Runs</code>
+  must both report <code>AU VALIDATION PASSED</code> before an Audio Unit shows up in
+  a menu. The MFX personality goes into Logic's MIDI FX slot (above the instrument),
+  not into an Audio FX slot.
 </div>
 <div class="box tip">
   <span class="t">Tip</span>

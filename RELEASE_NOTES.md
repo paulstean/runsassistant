@@ -1,6 +1,6 @@
-# Runs Assistant 0.1.2 - Release Notes
+# Runs Assistant 0.1.3 - Release Notes
 
-Date: 2026-10-08 | Platforms: Windows x64 + macOS universal (arm64 + x86_64)
+Date: 2026-10-09 | Platforms: Windows x64 + macOS universal (arm64 + x86_64)
 | Formats: VST3 + CLAP (+ AU on macOS) | License: AGPLv3 (JUCE 8 open-source tier)
 
 Runs Assistant is a MIDI "middleware" plug-in: play two notes together to fire a
@@ -22,8 +22,8 @@ consume straight through.
 | `README.md` | Project overview, build-from-source instructions |
 | `LICENSE` | GNU Affero General Public License v3 |
 
-Zip names: `RunsAssistant-0.1.2-win-x64.zip`,
-`RunsAssistant-0.1.2-mac-universal.zip`. A SHA-256 file accompanies the
+Zip names: `RunsAssistant-0.1.3-win-x64.zip`,
+`RunsAssistant-0.1.3-mac-universal.zip`. A SHA-256 file accompanies the
 Windows zip.
 
 ## Install
@@ -47,15 +47,46 @@ Windows zip.
      instrument track (any AU host),
    * `RunsAssistantMFX.component` - the `aumi` personality for Logic's MIDI
      FX slot.
-3. Rescan plugins (`auval -a` for AUs if needed) and insert Runs Assistant
-   **before** the instrument.
-4. **Unsigned build:** the CI zips carry an ad-hoc signature only (no
-   Developer-ID / notarisation). If macOS refuses to load a bundle, clear the
-   quarantine attribute, e.g.
-   `xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/Components/`
-   (and the VST3 / CLAP folders you copied to).
+3. **Unsigned build:** the CI zips carry an ad-hoc signature only (no
+   Developer-ID / notarisation). Clear the quarantine attribute on everything
+   you copied, e.g.
+   `sudo xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/`
+   (plus any user-level plug-in folder such as
+   `~/Library/Audio/Plug-Ins/`).
+4. **Force an AU rescan.** macOS caches AU scan results, and a failure
+   recorded *before* step 3 stays cached - clearing quarantine alone does not
+   re-run the check. Quit Logic first, then either use Logic's
+   Plug-in Manager -> Reset & Rescan All, or flush the system cache:
+   `killall -9 AudioComponentRegistrar` and delete
+   `~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache` (plus
+   `com.apple.audiounits.sandboxed.cache` if it exists), then start Logic.
+5. Optional but decisive - both commands must print
+   `AU VALIDATION PASSED`, otherwise Logic will not list the plug-in:
+   `auval -v aumf Run1 Runs` and `auval -v aumi Run2 Runs`.
+   (`auval -a` lists every registered AU with its type/subtype/manufacturer.)
+6. Insert Runs Assistant **before** the instrument: the `aumf` personality in
+   an Audio FX slot, the MFX personality in Logic's MIDI FX slot (the slot
+   above the instrument).
 
 Both builds are universal (arm64 + x86_64).
+
+## What's new in 0.1.3
+
+* **Logic sees the MFX personality again** - `RunsAssistantMFX.component`
+  (`aumi`, Logic's MIDI FX slot) was compiled with the shared stereo audio
+  input bus, while the AU wrapper reports 0 input channels for
+  `kAudioUnitType_MIDIProcessor`. `auval` rejected the component on that
+  mismatch, and Logic leaves anything that fails validation out of its menus
+  (and caches the failure). The aumi build now declares no input bus
+  (specification S2: a passthrough bus only "where the format demands one").
+* **AU validation gates the mac build** - `mac.yml` installs both components
+  and runs `auval -v aumf Run1 Runs` + `auval -v aumi Run2 Runs` before it
+  packages the zip, so a component Logic would hide can no longer ship.
+* **macOS install steps** - quarantine removal is no longer presented as the
+  whole fix: the docs now cover flushing the AU registration cache (a failed
+  scan stays cached), the two `auval` checks, and where each personality is
+  inserted. Version bumped to 0.1.3 so Logic re-evaluates the changed MFX
+  channel layout instead of trusting its 0.1.2 cache.
 
 ## What's new in 0.1.2
 
@@ -102,7 +133,8 @@ Both builds are universal (arm64 + x86_64).
 * No undo manager and no preset files in v1: use Copy/Paste for settings
   before experimenting.
 * Known-unfinished: the manual REAPER verification checklist (plan P4) is
-  pending owner pass; AU validation (`auval`) is a first-run checklist item.
+  pending owner pass. AU validation (`auval`, both personalities) now gates
+  the macOS build in `mac.yml`.
 
 ## Getting involved
 
