@@ -49,6 +49,11 @@ Windows zip.
      FX slot.
 3. Rescan plugins (`auval -a` for AUs if needed) and insert Runs Assistant
    **before** the instrument.
+4. **Unsigned build:** the CI zips carry an ad-hoc signature only (no
+   Developer-ID / notarisation). If macOS refuses to load a bundle, clear the
+   quarantine attribute, e.g.
+   `xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/Components/`
+   (and the VST3 / CLAP folders you copied to).
 
 Both builds are universal (arm64 + x86_64).
 

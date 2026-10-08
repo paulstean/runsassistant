@@ -158,6 +158,13 @@ instruments, harp/guitar glissando-style lines that stay in key and on the beat.
   <tr><td>AU (macOS)</td><td>Available both as a MIDI-controlled effect (<code>aumf</code>)
   and for the MIDI FX slot (<code>aumi</code>).</td></tr>
 </table>
+<div class="box warn">
+  <span class="t">macOS: unsigned builds</span>
+  The release zips are ad-hoc signed only (no Developer-ID signature or notarisation).
+  If macOS refuses to load a bundle, clear the quarantine attribute, e.g.
+  <code>xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/</code> (plus any
+  user-level plug-in folder you copied to), then rescan in your DAW.
+</div>
 <div class="box tip">
   <span class="t">Tip</span>
   Primary validation host is REAPER. Other hosts work best-effort; if a host does not
