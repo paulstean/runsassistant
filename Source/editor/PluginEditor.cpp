@@ -585,7 +585,10 @@ class SettingsDialog : public juce::DialogWindow
 {
 public:
     SettingsDialog()
-        : DialogWindow ("Settings", runui::panel(), nullptr, true)
+        // (name, backgroundColour, escapeKeyTriggersCloseButton,
+        //  addToDesktop). The 3rd arg is a bool: clang rejects the
+        //  nullptr MSVC tolerated here (mac build), pass the flag directly.
+        : DialogWindow ("Settings", runui::panel(), true)
     {
         setUsingNativeTitleBar (false);
     }
