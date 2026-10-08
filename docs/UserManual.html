@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs Assistant - User Manual</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --panel2: #22262f;
+    --edge: #333844;
+    --text: #d7dae2;
+    --dim: #8b91a0;
+    --accent: #57b2ff;
+    --accent2: #7ee0a3;
+    --warn: #ff6b6b;
+    --code-bg: #0e1014;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { display: flex; min-height: 100vh; }
+  nav {
+    width: 260px; flex: 0 0 260px;
+    background: var(--panel);
+    border-right: 1px solid var(--edge);
+    padding: 24px 18px;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav .brand { font-weight: 700; font-size: 17px; color: var(--accent); margin-bottom: 4px; }
+  nav .sub { color: var(--dim); font-size: 12px; margin-bottom: 18px; }
+  nav a { display: block; color: var(--text); text-decoration: none; padding: 5px 8px; border-radius: 5px; font-size: 14px; }
+  nav a:hover { background: var(--panel2); color: var(--accent); }
+  nav h4 { margin: 18px 0 6px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  main { flex: 1; min-width: 0; padding: 36px 48px 80px; max-width: 980px; }
+  h1 { font-size: 30px; margin: 0 0 6px; color: #fff; }
+  h2 { font-size: 21px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--edge); color: #fff; }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--accent2); }
+  p, li { color: var(--text); }
+  .lede { font-size: 16px; color: var(--dim); }
+  code, kbd {
+    background: var(--code-bg); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 1px 5px; font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 13px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto;
+    font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.5;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 22px; font-size: 14px; }
+  th, td { border: 1px solid var(--edge); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: #fff; font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .box {
+    background: var(--panel); border: 1px solid var(--edge); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 12px 16px; margin: 16px 0;
+  }
+  .box.tip { border-left-color: var(--accent2); }
+  .box.warn { border-left-color: var(--warn); }
+  .box .t { font-weight: 700; color: var(--accent); display: block; margin-bottom: 4px; }
+  .box.tip .t { color: var(--accent2); }
+  .box.warn .t { color: var(--warn); }
+  .kbd { background: var(--panel2); border: 1px solid var(--edge); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  .muted { color: var(--dim); }
+  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--edge); border-radius: 20px; padding: 1px 9px; font-size: 12px; color: var(--dim); }
+  hr { border: 0; border-top: 1px solid var(--edge); margin: 34px 0; }
+  @media (max-width: 860px) {
+    nav { display: none; }
+    main { padding: 24px 18px 60px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <div class="brand">Runs Assistant</div>
+  <div class="sub">User Manual - v0.1.x</div>
+  <h4>Getting started</h4>
+  <a href="#intro">What it does</a>
+  <a href="#install">Install &amp; routing</a>
+  <a href="#quickstart">Quick start</a>
+  <h4>Playing</h4>
+  <a href="#engine">Engine states</a>
+  <a href="#pairs">Trigger pairs</a>
+  <a href="#cuts">Cuts &amp; stopping</a>
+  <h4>Panel</h4>
+  <a href="#scale">Scale (tonic / mode / ticks)</a>
+  <a href="#shape">Beats, Density, Curve</a>
+  <a href="#velocity">Accent, Arc, Overlap</a>
+  <a href="#walk">Walk modes</a>
+  <a href="#preview">Curve preview</a>
+  <a href="#humanize">Humanize &amp; Seed</a>
+  <a href="#export">MIDI export</a>
+  <a href="#clipboard">Copy / Paste</a>
+  <h4>Configuration</h4>
+  <a href="#settings">Settings dialog</a>
+  <a href="#ccmap">CC mapping</a>
+  <a href="#debug">Debug overlay</a>
+  <a href="#automation">Host automation</a>
+  <a href="#state">Saving &amp; state</a>
+  <h4>Reference</h4>
+  <a href="#parameters">Parameter table</a>
+  <a href="#faq">FAQ &amp; tips</a>
+</nav>
+
+<main>
+<h1>Runs Assistant</h1>
+<p class="lede">A MIDI plug-in (VST3 / CLAP / AU) that turns two notes played together into a
+realistic scale run - shaped in time and accented to the beat.</p>
+
+<div class="box">
+  <span class="t">The one-sentence version</span>
+  Arm the engine, play <strong>two notes at once</strong> (any order), and Runs Assistant
+  swallows them and plays a run between the two pitches, locked to your DAW's grid, over a
+  chosen number of beats.
+</div>
+
+<h2 id="intro">1. What it does</h2>
+<p>Runs Assistant is <em>MIDI middleware</em>: it sits on a track <em>before</em> the virtual
+instrument and rewrites what reaches it. It produces no sound of its own. Realism comes from
+two ideas:</p>
+<ul>
+  <li><strong>Shape in time (Curve)</strong> - run notes do not arrive at metronomic spacing.
+  The start and end of the run spread out while the middle rushes through: slow, quick,
+  slow. One slider sets how strong that shape is; at 0% the sweep is perfectly even.</li>
+  <li><strong>Metric velocity emphasis (Accent)</strong> - notes landing on a beat play
+  louder, with downbeats strongest, scaled by how close each note falls to the grid line.
+  At 0% every note is the same loudness.</li>
+</ul>
+<p>On top of that, each note's velocity is a fade between the two trigger notes' velocities,
+optionally swelled or tapered by the <strong>Arc</strong> control - so a run can start fff
+and end ppp just by how you played the pair.</p>
+<p>Typical uses: scalar runs and flourishes in orchestral mock-ups, fast licks for lead
+instruments, harp/guitar glissando-style lines that stay in key and on the beat.</p>
+
+<h2 id="install">2. Install &amp; routing</h2>
+<ol>
+  <li>Copy the plug-in bundles into your VST3 / CLAP / AU folders (or run the installer
+  provided with the release).</li>
+  <li>Rescan plugins in your DAW.</li>
+  <li>Insert Runs Assistant on a <strong>MIDI track as the first plug-in</strong>, ahead of
+  the instrument that should play the run (e.g. Runs Assistant &rarr; sampler &rarr; mixer).</li>
+  <li>Make sure the instrument receives MIDI from the track as usual. Runs Assistant passes
+  everything it does not consume straight through, so the rest of your playing is unaffected.</li>
+</ol>
+<table>
+  <tr><th>Format</th><th>Notes</th></tr>
+  <tr><td>VST3</td><td>Exposed as an instrument with one silent stereo bus (a host category
+  requirement). Audio passes through untouched; only MIDI matters.</td></tr>
+  <tr><td>CLAP</td><td>A <code>note-effect</code>: insert it before your instrument in the
+  chain.</td></tr>
+  <tr><td>AU (macOS)</td><td>Available both as a MIDI-controlled effect (<code>aumf</code>)
+  and for the MIDI FX slot (<code>aumi</code>).</td></tr>
+</table>
+<div class="box tip">
+  <span class="t">Tip</span>
+  Primary validation host is REAPER. Other hosts work best-effort; if a host does not
+  forward MIDI between plug-ins on a track, the engine will simply look silent.
+</div>
+
+<h2 id="quickstart">3. Quick start</h2>
+<ol>
+  <li>Insert Runs Assistant before your instrument.</li>
+  <li>Leave the engine at <strong>Up</strong> (the default).</li>
+  <li>Pick a scale: <strong>Tonic</strong> + <strong>Mode</strong> (defaults: C, Major).</li>
+  <li>Set <strong>Beats</strong> to 4 and <strong>Density</strong> to 5 notes/beat - that
+  makes a 20-note run over 4 beats.</li>
+  <li>Press play (or stay stopped - both work, see <a href="#shape">5</a>), then play two
+  notes together, for example C4 and C5. The pair disappears and a 20-note C major run
+  from C4 to C5 fires, aligned to the next beat.</li>
+  <li>Release either trigger note early to cut the run; play around with
+  <strong>Curve</strong> and <strong>Accent</strong> while you listen.</li>
+</ol>
+
+<h2 id="engine">4. Engine states: Off / Up / Down</h2>
+<p>The three buttons in the title row are the engine switch. Exactly one is active. The
+engine boots in <strong>Off</strong> and the state is saved with your project.</p>
+<table>
+  <tr><th>State</th><th>Behaviour</th></tr>
+  <tr><td><strong>Off</strong></td><td>Full pass-through. Every note, CC, program change and
+  keyswitch goes out exactly as it came in - Runs Assistant does nothing. Use this as your
+  bypass.</td></tr>
+  <tr><td><strong>Up</strong></td><td>Two notes together fire a run climbing from the lower
+  pitch to the higher pitch.</td></tr>
+  <tr><td><strong>Down</strong></td><td>The same, but descending: from the higher pitch to
+  the lower one.</td></tr>
+</table>
+<p>The switch can be driven three ways (choose in <a href="#settings">Settings</a>):</p>
+<table>
+  <tr><th>Source</th><th>Off</th><th>Up</th><th>Down</th><th>Default</th></tr>
+  <tr><td>CC</td><td>0 - 40</td><td>41 - 79</td><td>80 - 127</td><td>CC87</td></tr>
+  <tr><td>Notes (keyswitch)</td><td>C0</td><td>C#0</td><td>D0</td><td>opt-in</td></tr>
+  <tr><td>Program change</td><td>0</td><td>1</td><td>2</td><td>opt-in</td></tr>
+</table>
+<ul>
+  <li>The GUI buttons, the MIDI source and host automation all control the <em>same</em>
+  state and mirror each other.</li>
+  <li>Changing the engine while a run is active cuts the run immediately.</li>
+  <li><strong>Engine-off handoff:</strong> a note you are still holding while the engine is
+  Off becomes that channel's pending note when you switch to Up/Down - the next note you
+  play completes the pair right there, without needing to re-strike.</li>
+</ul>
+
+<h2 id="pairs">5. Trigger pairs, singles and jabs</h2>
+<h3>How a pair fires</h3>
+<ul>
+  <li>While the engine is Up/Down, the <strong>first</strong> note you press is held back
+  (pending) - nothing is sent yet.</li>
+  <li>If a <strong>second, different-pitch</strong> note arrives while the first is still
+  held, the pair is complete: both notes are consumed and the run fires at that instant,
+  with its start aligned forward to the next beat.</li>
+  <li>The lower pitch of the pair is the <em>start</em>, the higher is the <em>target</em>;
+  the engine direction decides which end the run begins from. The two played velocities
+  become the run's first and last velocity.</li>
+  <li>If the trigger lands within about 2 ms <em>after</em> a beat line, it counts as being
+  on that line (human anticipation tolerance) and the run starts there.</li>
+</ul>
+<h3>Single notes (melody still works)</h3>
+<ul>
+  <li>If you press a note and <strong>release it again before playing anything else</strong>,
+  it is played late - it sounds as a short note (from the release moment), so your melody
+  is never swallowed. The debug overlay counts these as <em>late singles</em>.</li>
+  <li>Pressing the <em>same pitch twice</em> never makes a pair; both notes play normally.</li>
+  <li>Once a note is sounding and a second melodic note arrives, it also passes straight
+  through - the pair window is strictly "both notes still held and unheard".</li>
+  <li>Three-note (and bigger) chords: the extra notes pass through.</li>
+</ul>
+<div class="box warn">
+  <span class="t">Worth knowing</span>
+  Very fast legato playing while the engine is on can occasionally form an accidental pair
+  (two notes pressed before the first is released). That is inherent to the trigger design;
+  switch the engine to Off for straight melodic playing.
+</div>
+
+<h2 id="cuts">6. Cutting a run</h2>
+<p>One run at a time; triggers during an active run are ignored. A running run ends
+<em>immediately</em> - already-sounding notes stop at that sample, scheduled notes are
+dropped - when any of these happens:</p>
+<ul>
+  <li>you release <strong>either</strong> of the two trigger notes,</li>
+  <li>the engine state changes (GUI button, engine CC/keyswitch/PC, or host automation),</li>
+  <li>the transport jumps: loop wrap, click-back or a seek,</li>
+  <li>all-notes-off (CC 123) arrives - which also passes through to the instrument,</li>
+  <li>playback starts or stops (the scheduling grid changes meaning).</li>
+</ul>
+<div class="box tip">
+  <span class="t">The final note holds</span>
+  The run's target note is <em>not</em> stopped by the beat count. It keeps ringing until
+  you release a trigger note (or another cut happens). So with Beats = 4 and the pair held
+  for 8 beats, the run sweeps across beats 1-4 and the last note rings on through beat 8.
+</div>
+
+<h2 id="scale">7. Scale: Tonic, Mode and the tick grid</h2>
+<ul>
+  <li><strong>Tonic</strong> - C through B, the root everything is measured from.</li>
+  <li><strong>Mode</strong> - Major (Ionian), Dorian, Phrygian, Lydian, Mixolydian, Aeolian
+  (Natural Minor), Locrian, Harmonic Minor, Melodic Minor (ascending), Whole Tone,
+  Octatonic (whole-half), Octatonic (half-whole), Major Pentatonic, Minor Pentatonic, Blues,
+  Chromatic, Custom.</li>
+  <li><strong>12 pitch-class ticks</strong> - always visible. Choosing a tonic + mode ticks
+  them for you. Ticking or un-ticking a box by hand switches the Mode to <strong>Custom</strong>
+  and keeps exactly your tick set.</li>
+</ul>
+<p>Runs can only contain scale tones. When the two trigger pitches are not scale notes, each
+endpoint snaps <em>inward</em> to the nearest one (the span never grows). If snapping makes
+the two notes collapse onto the same pitch, there is no run: both notes simply play through
+as ordinary notes.</p>
+<div class="box tip">
+  <span class="t">Tip</span>
+  Chromatic is just "all twelve ticked". For a whole-tone flourish, pick Whole Tone mode; for
+  a blues lick, Blues.
+</div>
+
+<h2 id="shape">8. Beats, Density and Curve (the run's shape)</h2>
+<table>
+  <tr><th>Control</th><th>Range / default</th><th>What it does</th></tr>
+  <tr><td><strong>Beats</strong></td><td>1..16, default 4</td><td>How long the run takes to
+  sweep from first note to target, in host beats. This is the run's time span; the held
+  trigger notes decide when the final note ends.</td></tr>
+  <tr><td><strong>Density</strong></td><td>1..16 notes/beat, default 5</td><td>Note count =
+  round(Density x Beats). Default: 5 x 4 = 20 notes.</td></tr>
+  <tr><td><strong>Curve</strong></td><td>0..100%, default 22</td><td>Timing shape. 0% = even,
+  metronomic spacing. Higher = the run starts deliberately spread out, races through the
+  middle, and settles at the end (slow, quick, slow).</td></tr>
+</table>
+<h3>Grid lock and transport</h3>
+<ul>
+  <li><strong>Playing:</strong> all onsets are scheduled in host beat positions, so they
+  follow the DAW grid and tempo changes exactly. The run starts on the next whole beat after
+  the trigger.</li>
+  <li><strong>Stopped (or no timing info):</strong> a virtual grid at the last known tempo
+  (default 120 bpm) runs from the trigger moment. You can audition runs without playing the
+  transport.</li>
+  <li>Time signature is read from the host (default 4/4) so bar-line accents land where you
+  expect.</li>
+</ul>
+<h3>Note count effects</h3>
+<ul>
+  <li><strong>Under-filled</strong> (fewer notes than scale degrees in the span): the climb
+  is compressed proportionally across the run - leaps are spread out rather than dumped at
+  the end.</li>
+  <li><strong>Over-filled</strong> (more notes than degrees): the run has to double back; the
+  <a href="#walk">Walk</a> mode decides how.</li>
+</ul>
+
+<h2 id="velocity">9. Accent, Arc and Overlap (the run's feel)</h2>
+<table>
+  <tr><th>Control</th><th>Range / default</th><th>What it does</th></tr>
+  <tr><td><strong>Accent</strong></td><td>0..100%, default 41</td><td>Metric emphasis:
+  notes close to a beat line play louder; downbeats get the strongest push, other beats a
+  lighter one. 0% = flat, 100% = strong groove.</td></tr>
+  <tr><td><strong>Arc</strong></td><td>-100%..+100%, default +15</td><td>A final swell or
+  taper across the run. Negative fades the run out, positive fades it in, 0% is neutral.
+  Applied on top of the start&rarr;target velocity fade.</td></tr>
+  <tr><td><strong>Overlap</strong></td><td>Off / On, default On</td><td>On: each note is held
+  slightly past the next note-on, so instruments that engage legato mode by detecting
+  overlapping notes will trigger it. Off: every note stops before the next begins.</td></tr>
+</table>
+<p>Per note: <code>velocity = start&rarr;target fade x Arc x Accent</code>, clamped to
+1..127.</p>
+<div class="box tip">
+  <span class="t">Tip</span>
+  Play the pair with very different velocities (e.g. first note fff, second pp) to get the
+  dramatic fade; use Arc when you want a swell that has nothing to do with how you played
+  the pair.
+</div>
+
+<h2 id="walk">10. Walk: Fold vs Zig-zag</h2>
+<p>When the requested note count exceeds the scale degrees available in the span, the walk
+has to repeat material. The choice is live at trigger time.</p>
+<table>
+  <tr><th>Mode</th><th>Behaviour</th></tr>
+  <tr><td><strong>Fold</strong></td><td>The run climbs to the edge of the span and bounces
+  back, like a reflection. Both endpoints are always visited exactly.</td></tr>
+  <tr><td><strong>Zig-zag</strong> (default)</td><td>The run stays mostly monotonic, inserting
+  single backward steps at evenly spread positions, so the overall climb reads as a steady
+  ascent with small kickbacks.</td></tr>
+</table>
+<ul>
+  <li>Consecutive notes never repeat a pitch - a backward step is exactly one scale tone.</li>
+  <li>The first note is always the run's start pitch and the last is always the target,
+  whatever the walk does in between.</li>
+  <li>With Zig-zag, an odd step count can require dropping one note (the run comes out one
+  note shorter than Density x Beats); the debug overlay counts these <em>parity drops</em>.</li>
+</ul>
+
+<h2 id="preview">11. Curve shape preview</h2>
+<p>The square graph under the Walk/Overlap row draws the run the engine would play:</p>
+<ul>
+  <li><strong>Left &rarr; right</strong> is time through the run; <strong>bottom &rarr; top</strong>
+  is pitch progress (Engine Down mirrors it: top-left to bottom-right; Engine Off shows the
+  up shape).</li>
+  <li>One dot per run note, sitting on the curve at its exact onset - so the dots visibly
+  crowd the middle and spread at the rims as you raise Curve.</li>
+  <li>The faint straight diagonal is the 0% (even) reference. Higher Curve bends the line
+  away from it.</li>
+  <li>It follows Curve, Beats and Density live. It is an illustration only - it is not
+  interactive and shows no playhead.</li>
+</ul>
+
+<h2 id="humanize">12. Humanize and Seed</h2>
+<p>Humanize gives every run note a small, seeded velocity deflection and timing jitter so
+repeated runs do not sound machine-perfect. It is a host parameter (Off by default), and the
+seed and strengths travel with your project.</p>
+<table>
+  <tr><th>Control</th><th>Range / default</th><th>What it does</th></tr>
+  <tr><td><strong>Humanize</strong></td><td>Off / On, default Off</td><td>Master switch. Off,
+  the run is exactly deterministic no matter what the other fields hold.</td></tr>
+  <tr><td><strong>Seed</strong></td><td>0..999999, default 0</td><td><strong>0 = a fresh seed
+  every run.</strong> Any other value pins the pattern: same seed + same settings = the same
+  run, every time (including offline renders).</td></tr>
+  <tr><td><strong>H.vel</strong></td><td>0..50%, default 10</td><td>Velocity deflection
+  strength - up to +/- the set percent per note.</td></tr>
+  <tr><td><strong>H.time</strong></td><td>0..50 ms, default 8</td><td>Maximum timing
+  deviation per note, converted to beats at the current tempo.</td></tr>
+</table>
+<ul>
+  <li>Double-click either strength slider to reset it to its default.</li>
+  <li>Timing jitter never inverts note order, never moves a note before the run start or
+  past its end, and never touches the run's grid-locked start, the scale snapping or the
+  walk - only the notes <em>inside</em> the run move.</li>
+  <li>The accent model still judges each note against its un-jittered grid position, so the
+  metric emphasis stays honest.</li>
+  <li>Neither control is MIDI CC-mappable (nor is Overlap); they are driven from the panel,
+  host automation (Humanize/Seed) or the saved state.</li>
+</ul>
+<div class="box tip">
+  <span class="t">Pinning a run you liked</span>
+  With Seed 0, turn on the <a href="#debug">debug overlay</a> - it prints the seed each run
+  actually used. Type that number into the Seed field and the identical sway replays every
+  time. (Press Return or click away to commit.)
+</div>
+
+<h2 id="export">13. MIDI export (drag to the arrange window)</h2>
+<p>The <strong>Midi Export</strong> row renders one complete run from your current settings
+and hands it to the OS as a file you can drop straight into your DAW:</p>
+<ol>
+  <li>Choose <strong>Start</strong> and <strong>Target</strong> notes (C1..C8, defaults
+  C4/C5) and each note's velocity (defaults 100/90).</li>
+  <li>Press, hold and <strong>drag off the Drag MIDI button</strong> - the file appears
+  under the cursor and drops into the arrange window. (A plain click only flashes a hint;
+  the drag is what does the work.)</li>
+</ol>
+<ul>
+  <li>Direction follows the endpoints: lower&rarr;higher renders an Up run, higher&rarr;lower
+  a Down run. Start carries the first velocity, Target the last.</li>
+  <li>The file starts at beat 0 with 480 ticks per quarter, carries the current tempo and
+  time signature (120 bpm / 4/4 if the host reported none) and a track name. Drop it on a
+  bar line and the accents land on bar lines.</li>
+  <li>The held final note is closed with an explicit note-off one beat after the last onset.</li>
+  <li>If Start or Target is outside the current scale a red warning line appears naming the
+  note: the render still snaps it inward (like live playing). It only refuses when the pair
+  degenerates - a short reason then flashes on the button instead.</li>
+  <li>Export inputs are session-only: they are not parameters, not CC-mapped and not saved
+  with the project.</li>
+</ul>
+
+<h2 id="clipboard">14. Copy &amp; Paste between instances</h2>
+<p>The bottom row moves the <em>whole</em> state - engine, scale (tonic, mode, ticks), Beats,
+Density, Curve, Accent, Arc, Walk, Overlap, Humanize, Seed and all the settings - through
+the system clipboard as JSON text.</p>
+<ul>
+  <li><strong>Copy to Clipboard</strong> flushes the last held control values first, so the
+  text is always current. The button flashes <em>Copied</em>.</li>
+  <li><strong>Paste from Clipboard</strong> applies a Runs Assistant payload; out-of-range
+  values are clamped and missing fields keep their current values. Anything that is not a
+  Runs Assistant preset is rejected and changes nothing. Flashes <em>Pasted</em> or the
+  reason.</li>
+  <li>This is the only preset mechanism in v1 - there are no preset files. Save state in the
+  project itself, or keep JSON snippets in a text editor.</li>
+</ul>
+
+<h2 id="settings">15. Settings dialog</h2>
+<p>Open with the <strong>Settings</strong> button in the title row (<span class="kbd">Esc</span>
+closes it). Everything here is saved in the project state (not exposed as host parameters).</p>
+<h3>Engine switch source</h3>
+<ul>
+  <li><strong>Engine switch source</strong>: Notes / CC / PC.</li>
+  <li><strong>Engine CC number</strong> (CC mode, default 87), or the three
+  <strong>keyswitch notes</strong> (Off/Up/Down, default C0/C#0/D0), or the three
+  <strong>program changes</strong> (default 0/1/2).</li>
+</ul>
+<h3>Per-parameter CC bindings</h3>
+<p>Eight rows - Beats, Density, Curve, Accent, Arc, Tonic, Mode, Walk - each takes a CC
+number 0..127 or <code>none</code>. Defaults are CC88..CC95 in that order. Duplicate
+assignments are refused with a red warning on the row (the engine CC counts too). Incoming
+bound CCs are absorbed while the engine is on and mirrored live to the GUI; with the engine
+Off they pass through and the bindings are inert. Overlap, Humanize, Seed and the H.vel /
+H.time sliders are not CC-mappable.</p>
+<h3>Tuning (raw values)</h3>
+<table>
+  <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td>Alignment epsilon (ms)</td><td>2</td><td>A trigger landing this close after a beat
+  line counts as being on it.</td></tr>
+  <tr><td>Gate fraction</td><td>0.6</td><td>Each interior note's length as a share of the gap
+  to the next note (also the Overlap overhang share).</td></tr>
+  <tr><td>Downbeat weight</td><td>1.0</td><td>Accent push on bar lines.</td></tr>
+  <tr><td>Mid-bar beat weight</td><td>0.75</td><td>Accent push on other beats.</td></tr>
+</table>
+<p>These are tuning knobs for the adventurous - change them by ear, they travel with the
+project. <strong>Reset to defaults</strong> restores factory parameters, CC bindings,
+tuning and engine source settings (not undoable).</p>
+<div class="box warn">
+  <span class="t">No undo</span>
+  v1 has no undo manager: edits apply immediately. Copy to Clipboard before experimenting
+  if you want a way back.
+</div>
+
+<h2 id="ccmap">16. CC badges and remote control</h2>
+<p>Every CC-mapped control shows a small <code>ccNN:VV</code> badge beside it: NN is the
+bound CC number, VV a value in the middle of the bucket of CC values that reproduce the
+control's current position. A control with no binding - or the engine buttons when the
+engine source is Notes/PC - shows <code>cc:--</code>.</p>
+<table>
+  <tr><th>Control</th><th>Default CC</th><th>Mapping</th></tr>
+  <tr><td>Engine switch</td><td>87 (source-defined)</td><td>0-40 Off, 41-79 Up, 80-127 Down</td></tr>
+  <tr><td>Beats</td><td>88</td><td>Linear over 1..16</td></tr>
+  <tr><td>Density</td><td>89</td><td>Linear over 1..16</td></tr>
+  <tr><td>Curve</td><td>90</td><td>Linear over 0..100%</td></tr>
+  <tr><td>Accent</td><td>91</td><td>Linear over 0..100%</td></tr>
+  <tr><td>Arc</td><td>92</td><td>Linear over -100..+100%</td></tr>
+  <tr><td>Tonic</td><td>93</td><td>12 steps across the CC range</td></tr>
+  <tr><td>Mode</td><td>94</td><td>Steps across the mode list</td></tr>
+  <tr><td>Walk</td><td>95</td><td>0-63 Fold, 64-127 Zig-zag</td></tr>
+  <tr><td>Overlap / Humanize / Seed / H.vel / H.time</td><td>-</td><td>Not CC-mappable</td></tr>
+</table>
+<ul>
+  <li>Bound CCs are consumed (never echoed back to the MIDI stream) while the engine is on;
+  they pass through while it is Off.</li>
+  <li>Direction of control is last-writer-wins between the GUI, host automation and bound
+  CCs - the panel always shows the truth.</li>
+  <li>Change any binding in Settings; the badge updates immediately.</li>
+</ul>
+
+<h2 id="debug">17. Debug overlay</h2>
+<p>The <strong>Debug overlay</strong> checkbox in the bottom row opens a status readout:</p>
+<table>
+  <tr><th>Line</th><th>Contents</th></tr>
+  <tr><td>1</td><td>Engine state, current pending note (if one is held back), and internal
+  engine-switch diagnostics.</td></tr>
+  <tr><td>2</td><td>Run progress: notes emitted / total, and the last emitted pitch and
+  velocity.</td></tr>
+  <tr><td>3</td><td>Counters: <em>parity drops</em> (Zig-zag note-count adjustments),
+  <em>late singles</em> (melody notes released before pairing, played late), <em>cuts</em>.</td></tr>
+  <tr><td>4</td><td>Input event counts and any drops (overflow / mirror drops).</td></tr>
+  <tr><td>5</td><td>Playhead beat, tempo, and - while Humanize is on - the <strong>seed the
+  last run used</strong>.</td></tr>
+</table>
+
+<h2 id="automation">18. Host automation</h2>
+<p>All twelve parameters are host-automatable and named as on the panel:</p>
+<p>
+  <span class="pill">Engine (Off/Up/Down)</span> <span class="pill">Beats</span>
+  <span class="pill">Density</span> <span class="pill">Curve</span>
+  <span class="pill">Accent</span> <span class="pill">Arc</span>
+  <span class="pill">Tonic</span> <span class="pill">Mode</span>
+  <span class="pill">Walk</span> <span class="pill">Overlap</span>
+  <span class="pill">Humanize</span> <span class="pill">Seed</span>
+</p>
+<p>Settings (engine source, CC bindings, tuning constants, humanize strengths) are project
+state but deliberately <em>not</em> host parameters. Changing the engine from the GUI marks
+the project modified, so your engine state is always saved.</p>
+
+<h2 id="state">19. Saving and state</h2>
+<ul>
+  <li>Everything lives in the project/chunk: parameters, scale ticks, CC bindings, tuning,
+  engine state and window size. Old projects from earlier schema versions load with the new
+  fields at their defaults; corrupt or truncated data is rejected and your current state is
+  kept.</li>
+  <li>Runtime state is never saved: pending notes, an active run and the resolved humanize
+  seed are all live-only. (The <em>Seed parameter</em> is saved; the seed a particular run
+  happened to draw is not - read it off the overlay to pin it.)</li>
+  <li>There are no preset files in v1; use Copy/Paste (section 14) to move settings.</li>
+  <li>Pending CC tweaks are flushed into the state before it is written, so saving always
+  captures the last held control values even with the window closed.</li>
+</ul>
+
+<h2 id="parameters">20. Parameter reference</h2>
+<table>
+  <tr><th>#</th><th>Parameter</th><th>Range</th><th>Default</th><th>Default CC</th></tr>
+  <tr><td>1</td><td>Engine switch</td><td>Off / Up / Down</td><td>Up</td><td>87</td></tr>
+  <tr><td>2</td><td>Beats</td><td>1..16</td><td>4</td><td>88</td></tr>
+  <tr><td>3</td><td>Density</td><td>1..16 notes/beat</td><td>5</td><td>89</td></tr>
+  <tr><td>4</td><td>Curve</td><td>0..100%</td><td>22</td><td>90</td></tr>
+  <tr><td>5</td><td>Accent</td><td>0..100%</td><td>41</td><td>91</td></tr>
+  <tr><td>6</td><td>Arc</td><td>-100..+100%</td><td>+15</td><td>92</td></tr>
+  <tr><td>7</td><td>Tonic</td><td>C..B</td><td>C</td><td>93</td></tr>
+  <tr><td>8</td><td>Mode</td><td>17 modes (incl. Custom)</td><td>Major</td><td>94</td></tr>
+  <tr><td>9</td><td>Walk</td><td>Fold / Zig-zag</td><td>Zig-zag</td><td>95</td></tr>
+  <tr><td>10</td><td>Overlap</td><td>Off / On</td><td>On</td><td>none</td></tr>
+  <tr><td>11</td><td>Humanize</td><td>Off / On</td><td>Off</td><td>none</td></tr>
+  <tr><td>12</td><td>Seed</td><td>0..999999</td><td>0</td><td>none</td></tr>
+</table>
+
+<h2 id="faq">21. FAQ &amp; tips</h2>
+<h4>Nothing happens when I play two notes.</h4>
+<p>Check the engine is <strong>Up</strong> or <strong>Down</strong> (not Off), that the two
+notes are <em>different pitches</em> and both still held when the second arrives, and that
+both fall (after snapping) on different scale degrees. The overlay's <em>pending note</em>
+field shows whether the first note was registered.</p>
+<h4>The run plays but sounds late / early against the beat.</h4>
+<p>The run always starts on the next whole beat after the trigger; the trigger itself is
+consumed. If you trigger slightly before the beat, the run waits for it (up to the 2 ms
+alignment epsilon past the line). Nudge your playing, or lower the alignment epsilon in
+Settings if your timing is consistently late.</p>
+<h4>My melody notes get cut short while the engine is on.</h4>
+<p>Those are <em>late singles</em> - a note released before a pair formed. Play a bit more
+legato-separated, or switch the engine to Off for straight melodic lines (a held note
+survives the switch back to On and can still seed a pair).</p>
+<h4>How do I bypass without losing my settings?</h4>
+<p>Engine Off <em>is</em> the bypass - full pass-through, state intact. You can also automate
+the Engine parameter or send the engine CC.</p>
+<h4>Can I run two runs at once?</h4>
+<p>No - one run at a time (v1). Triggers during an active run are ignored; per-channel runs
+are a v2 item.</p>
+<h4>The run feels too perfect / too random.</h4>
+<p>Leave Humanize off for a deterministic run. On, keep H.vel near 10% and H.time near 8 ms
+for a subtle sway; push them toward 50 for a loose, human feel. Pin a Seed once you like the
+character.</p>
+<h4>Does it work when the transport is stopped?</h4>
+<p>Yes - a virtual grid at the last known tempo (120 bpm default) starts at the trigger, so
+you can audition settings with the transport parked.</p>
+<h4>Why does the last note keep ringing past Beats?</h4>
+<p>By design: Beats sets the sweep span; the held target note ends when you release a
+trigger note (see section 6).</p>
+<h4>Shortcut keys.</h4>
+<p>None are special, except <span class="kbd">Esc</span> closing Settings. Seed fields commit
+on <span class="kbd">Return</span> or focus loss; double-click the H.vel/H.time sliders to
+reset them.</p>
+
+<hr>
+<p class="muted">Runs Assistant v0.1.x - AGPLv3, free and open source. This manual describes
+the shipped behaviour; the normative reference is <code>specification.md</code> in the
+repository.</p>
+</main>
+</div>
+</body>
+</html>

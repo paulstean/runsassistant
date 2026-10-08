@@ -3,8 +3,10 @@
 #   pwsh tools/make-release.ps1 [-Version 0.1.0]
 # Version defaults to PROJECT_VERSION in CMakeLists.txt (single source of
 # truth); -Version overrides it for one-off packs.
-# Contains VST3 + CLAP only (plan.md P4: no installer, no REAPER binaries,
-# AU pack happens on a Mac in the D3 post-v1 phase).
+# Contains VST3 + CLAP + docs (plan.md P4: no installer, no REAPER binaries,
+# AU pack happens on a Mac in the D3 post-v1 phase):
+#   Runs Assistant.vst3 / Runs Assistant.clap
+#   UserManual.html (docs/)   RELEASE_NOTES.md   README.md   LICENSE (if any)
 param (
     [string]$Version = ""
 )
@@ -44,6 +46,11 @@ if (Test-Path -LiteralPath $clap) {
     Copy-Item -LiteralPath $clap -Destination (Join-Path $stage "Runs Assistant.clap") -Force
 }
 Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $stage "README.md") -Force
+Copy-Item -LiteralPath (Join-Path $root "RELEASE_NOTES.md") -Destination (Join-Path $stage "RELEASE_NOTES.md") -Force
+Copy-Item -LiteralPath (Join-Path $root "docs/UserManual.html") -Destination (Join-Path $stage "UserManual.html") -Force
+if (Test-Path -LiteralPath (Join-Path $root "LICENSE")) {
+    Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination (Join-Path $stage "LICENSE") -Force
+}
 
 $zip = Join-Path $out "RunsAssistant-$Version-win-x64.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
