@@ -227,7 +227,8 @@ public:
                             juce::dontSendNotification);
         tuneHeader.setColour (juce::Label::textColourId, runui::text());
         const char* tuneNames[4] = { "Alignment epsilon (ms)", "Gate fraction",
-                                     "Downbeat weight", "Mid-bar beat weight" };
+                                     "Downbeat weight",
+                                     "Mid-bar beat weight" };
         for (int i = 0; i < 4; ++i)
         {
             tuneNamesL[i].setText (tuneNames[i], juce::dontSendNotification);
@@ -470,8 +471,8 @@ private:
         if (ok)
         {
             *dst[i] = v;
-    markDirty();
-}
+            markDirty();
+        }
         // on invalid input the display reverts to the stored value
         tuneEditors[i].setText (juce::String (*dst[i], 4),
                                 juce::dontSendNotification);
@@ -483,7 +484,7 @@ private:
         // attachments and host learn of every change, exactly like GUI edits.
         static const char* ids[RunsProcessor::kNumParams] = {
             "engine", "beats", "density", "curve", "accent", "arc",
-            "tonic", "mode", "walk", "overlap"
+            "tonic", "mode", "walk", "overlap", "humanize", "seed"
         };
         for (int i = 0; i < RunsProcessor::kNumParams; ++i)
         {
@@ -675,7 +676,14 @@ private:
                                + juce::String (s.mirrorDrops) + ")",
                            juce::dontSendNotification);
         labels[4].setText ("beat: " + juce::String (s.beat, 3) + "   bpm: "
-                               + juce::String (s.bpm, 2),
+                               + juce::String (s.bpm, 2)
+                               // S5.9: seed of the last started run, so a
+                               // seed-0 run can be pinned and redone.
+                               + (s.runSeed != 0
+                                      ? "   seed: "
+                                            + juce::String (
+                                                  (juce::int64) s.runSeed)
+                                      : juce::String()),
                            juce::dontSendNotification);
         if (spikeLogPath.isNotEmpty())
             appendSpikeLog (s);
@@ -1060,6 +1068,103 @@ RunsEditor::RunsEditor (RunsProcessor& p)
         std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
             processor.apvts, "overlap", overlapButton);
 
+    // ---- Humanize toggle + Seed field (S5.9, curve strip) ---------------
+    // Toggle rides a ButtonAttachment (GUI / automation / chunk both ways);
+    // the seed field commits through the parameter notify path by hand (no
+    // badge: neither control is CC-mappable in v1).
+    humanizeButton.setName ("Humanize");
+    humanizeButton.setTooltip (
+        "Humanize: give every run note a small seeded velocity deflection "
+        "and timing jitter so repeated runs do not sound machine-perfect "
+        "(strengths are the H.vel / H.time sliders beside it). Seed 0 draws "
+        "a fresh seed each run; a pinned seed reproduces the pattern - the "
+        "debug overlay shows the seed each run used.");
+    addAndMakeVisible (humanizeButton);
+    humanizeAttachment =
+        std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            processor.apvts, "humanize", humanizeButton);
+
+    seedLabel.setText ("Seed", juce::dontSendNotification);
+    seedLabel.setColour (juce::Label::textColourId, runui::text());
+    seedLabel.setTooltip (humanizeButton.getTooltip());
+    addAndMakeVisible (seedLabel);
+    seedEditor.setName ("Seed");
+    seedEditor.setTooltip (
+        "Humanize seed: 0 = a new seed every run; 1..999999 reproduces a "
+        "specific velocity/timing pattern (the overlay prints the seed of "
+        "the last run). Type a value and press Return.");
+    seedEditor.setInputRestrictions (6, "0123456789");
+    seedEditor.addListener (this);
+    addAndMakeVisible (seedEditor);
+    refreshSeedText();
+
+    // ---- Humanize strength sliders (S5.9; chunk-only tuning state) -------
+    // These edit processor.settings directly (like the Settings tunables
+    // they replaced on the dialog): no host parameter, no attachment, no
+    // badge. The 20 Hz timer pulls fresh values for chunk loads / pastes /
+    // resets; writes go through markStateDirty so the project dirties (S7).
+    {
+        const char* hTip =
+            "Humanize strength (also shown in the run's saved state): "
+            "velocity deflection percent and maximum timing deviation in "
+            "milliseconds. 0 = exact deterministic run, up to 50 = strong "
+            "swing. Double-click a slider to reset it (10% / 8 ms).";
+        auto setupStrength = [this, hTip] (juce::Label& name, juce::Slider& s,
+                                           juce::Label& readout,
+                                           const char* text, double def)
+        {
+            name.setText (text, juce::dontSendNotification);
+            name.setColour (juce::Label::textColourId, runui::text());
+            name.setTooltip (hTip);
+            addAndMakeVisible (name);
+            s.setSliderStyle (juce::Slider::LinearHorizontal);
+            s.setRange (0.0, 50.0, 0.1);
+            s.setValue (def, juce::dontSendNotification);
+            s.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+            s.setDoubleClickReturnValue (true, def);
+            s.setTooltip (hTip);
+            addAndMakeVisible (s);
+            readout.setColour (juce::Label::textColourId, runui::dim());
+            readout.setJustificationType (juce::Justification::centredLeft);
+            readout.setTooltip (hTip);
+            addAndMakeVisible (readout);
+        };
+        setupStrength (hvelName, hvelSlider, hvelReadout, "H.vel", 10.0);
+        setupStrength (htimeName, htimeSlider, htimeReadout, "H.time", 8.0);
+        // The onValueChange writes are installed after setup so they own the
+        // whole field write (value + readout + host-dirty) in one place.
+        hvelSlider.onValueChange = [this]
+        {
+            processor.settings.humanizeVelPercent =
+                (float) hvelSlider.getValue();
+            hvelReadout.setText (
+                juce::String (hvelSlider.getValue(), 1) + "%",
+                juce::dontSendNotification);
+            processor.markStateDirty(); // chunk-only edit (S7)
+        };
+        htimeSlider.onValueChange = [this]
+        {
+            processor.settings.humanizeTimingMs =
+                (float) htimeSlider.getValue();
+            htimeReadout.setText (
+                juce::String (htimeSlider.getValue(), 1) + "ms",
+                juce::dontSendNotification);
+            processor.markStateDirty(); // chunk-only edit (S7)
+        };
+        // Seed the sliders/readouts from the current settings (timer keeps
+        // them in step afterwards, see timerCallback()).
+        hvelSlider.setValue (processor.settings.humanizeVelPercent,
+                             juce::dontSendNotification);
+        htimeSlider.setValue (processor.settings.humanizeTimingMs,
+                              juce::dontSendNotification);
+        hvelReadout.setText (
+            juce::String (processor.settings.humanizeVelPercent, 1) + "%",
+            juce::dontSendNotification);
+        htimeReadout.setText (
+            juce::String (processor.settings.humanizeTimingMs, 1) + "ms",
+            juce::dontSendNotification);
+    }
+
     // ---- Offline export row (session-only) -------------------------------
     // No attachments: the endpoints and their velocities live in the editor
     // and are dropped with it (they are export inputs, not host state).
@@ -1214,6 +1319,21 @@ void RunsEditor::timerCallback()
     // so this is what picks up Settings-dialog edits, chunk loads, pastes
     // and resets (cheap: cached no-op unless a binding or value moved).
     updateCcBadges();
+
+    // S5.9: keep the seed field in step with the parameter (host automation,
+    // pastes, resets) - but never stomp text the user is typing right now.
+    refreshSeedText();
+
+    // S5.9: same for the strength sliders, which mirror the chunk-only
+    // settings struct (no listener, so polling is what catches chunk loads,
+    // pastes and Settings-dialog resets). Skip while the user is dragging.
+    auto pull = [] (juce::Slider& s, float want)
+    {
+        if (! s.isMouseButtonDown() && s.getValue() != (double) want)
+            s.setValue (want, juce::dontSendNotification);
+    };
+    pull (hvelSlider, processor.settings.humanizeVelPercent);
+    pull (htimeSlider, processor.settings.humanizeTimingMs);
 }
 
 RunsEditor::~RunsEditor()
@@ -1352,6 +1472,48 @@ void RunsEditor::syncWalkRadios()
     zigzagButton.setToggleState (idx == 1, juce::dontSendNotification);
     foldButton.setToggleState (idx == 0, juce::dontSendNotification);
     refreshGuard = false;
+}
+
+// ---- S5.9 seed field ------------------------------------------------------
+void RunsEditor::textEditorReturnKeyPressed (juce::TextEditor& e)
+{
+    if (&e == &seedEditor)
+    {
+        commitSeed();
+        e.giveAwayKeyboardFocus();
+        return;
+    }
+}
+
+void RunsEditor::textEditorFocusLost (juce::TextEditor& e)
+{
+    if (&e == &seedEditor)
+        commitSeed();
+}
+
+void RunsEditor::commitSeed()
+{
+    // Parse + clamp, write through the normal notify path (undo, automation
+    // and the host all see it like any other parameter edit), then re-show
+    // the clamped value so an out-of-range entry does not linger as text.
+    int v = seedEditor.getText().trim().getIntValue();
+    if (seedEditor.getText().trim().isEmpty())
+        v = 0;
+    v = juce::jlimit (0, 999999, v);
+    if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (
+            processor.apvts.getParameter ("seed")))
+        p->setValueNotifyingHost (p->convertTo0to1 ((float) v));
+    refreshSeedText();
+}
+
+void RunsEditor::refreshSeedText()
+{
+    if (seedEditor.hasKeyboardFocus (true))
+        return; // never stomp a value mid-edit
+    const juce::String want ((int) readRangedParam (processor, "seed",
+                                                    999999.0f));
+    if (seedEditor.getText() != want)
+        seedEditor.setText (want, juce::dontSendNotification);
 }
 
 // Clipboard preset (S9): JSON text through the system clipboard. Both
@@ -1571,11 +1733,11 @@ void RunsEditor::ensureDialog()
     {
         settingsPanel = std::make_unique<SettingsPanel> (processor);
         settingsDialog = std::make_unique<SettingsDialog>();
-        settingsPanel->setSize (560, 470);
+        settingsPanel->setSize (560, 516); // 4 tunables; also fits reset row
         settingsDialog->setContentNonOwned (settingsPanel.get(), true);
     }
     settingsPanel->refresh();
-    settingsDialog->centreAroundComponent (this, 570, 510);
+    settingsDialog->centreAroundComponent (this, 570, 556);
     settingsDialog->setVisible (true);
     settingsDialog->toFront (true);
     if (! settingsDialog->isCurrentlyModal())
@@ -1695,11 +1857,33 @@ void RunsEditor::resized()
     }
     area.removeFromTop (8);
 
-    // Curve shape preview (S9): square below the Walk/Overlap row
+    // Curve shape preview (S9): square below the Walk/Overlap row, with the
+    // S5.9 Humanize toggle + Seed field centred in the strip's rest (no
+    // extra window height; fits the 720 px minimum width).
     if (curveView != nullptr)
     {
         auto cv = area.removeFromTop (100);
         curveView->setBounds (cv.removeFromLeft (100));
+        auto ctl = juce::Rectangle<int> (
+            cv.getX() + 16, cv.getY() + (cv.getHeight() - 26) / 2,
+            juce::jmax (0, cv.getWidth() - 16), 26);
+        humanizeButton.setBounds (ctl.removeFromLeft (110).reduced (2, 2));
+        seedLabel.setBounds (ctl.removeFromLeft (44));
+        seedEditor.setBounds (ctl.removeFromLeft (84).reduced (0, 3));
+        // S5.9 strength sliders share what's left of the strip: fixed name +
+        // readout widths, the two slider gutters flex (fits the 720 px
+        // minimum width: 42+46 per slot + 2x16 gutters + 238 head = 296).
+        ctl.removeFromLeft (16);
+        const int slotW = juce::jmax (140, (ctl.getWidth() - 16) / 2);
+        auto slot = ctl.removeFromLeft (slotW);
+        hvelName.setBounds (slot.removeFromLeft (42));
+        hvelReadout.setBounds (slot.removeFromRight (46));
+        hvelSlider.setBounds (slot.reduced (2, 4));
+        ctl.removeFromLeft (16);
+        slot = ctl.removeFromLeft (slotW);
+        htimeName.setBounds (slot.removeFromLeft (42));
+        htimeReadout.setBounds (slot.removeFromRight (46));
+        htimeSlider.setBounds (slot.reduced (2, 4));
     }
     // Section rule + "Midi Export" heading (S9); the hairline itself is
     // painted by paint().

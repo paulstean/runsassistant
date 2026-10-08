@@ -6,6 +6,18 @@
 namespace runsp
 {
 
+uint32_t humanizePrngNext (uint32_t& state)
+{
+    // S5.9: splitmix32 - a bijective, allocation-free mixing function; the
+    // stream state is the run's resolved seed (or the processor's counter
+    // when minting a fresh seed).
+    state += 0x9E3779B9u;
+    uint32_t z = state;
+    z = (z ^ (z >> 16)) * 0x21F0AAADu;
+    z = (z ^ (z >> 15)) * 0x735A2D97u;
+    return z ^ (z >> 15);
+}
+
 namespace
 {
 constexpr double kBeatEps = 1e-9; // float-comparison guard (S6.2 house rule)
@@ -138,6 +150,40 @@ bool RunEngine::startRun (const PairTrigger& t, const RunParams& p)
         vels_[i] = (uint8_t) computeVelocity (vStart, vEnd,
             count_ > 1 ? (double) i / (dn - 1.0) : 0.0,
             p.arc, p.accentStrength, w, falloff);
+    }
+
+    // S5.9 humanization: one splitmix32 stream seeded with the run's seed,
+    // fixed draw layout so a seed always yields the same pattern for a given
+    // n: first count_ draws deflect velocities (the S5.7 stack above already
+    // ran on the un-jittered positions, so metric emphasis still describes
+    // the grid), then count_ draws jitter onsets, clamped into the run span
+    // and forced non-decreasing so note order and the S5.8 off-before-on
+    // contracts survive the jitter.
+    seedUsed_ = p.humanize ? p.humanizeSeed : 0;
+    if (p.humanize)
+    {
+        uint32_t state = p.humanizeSeed;
+        const double amt = p.humanizeVelAmt < 0.0 ? 0.0 : p.humanizeVelAmt;
+        for (int i = 0; i < count_; ++i)
+        {
+            const double u = (double) humanizePrngNext (state)
+                           * (1.0 / 4294967296.0); // [0,1)
+            int v = (int) std::lround ((double) vels_[i]
+                                       * (1.0 + amt * (2.0 * u - 1.0)));
+            vels_[i] = (uint8_t) (v < 1 ? 1 : (v > 127 ? 127 : v));
+        }
+        const double tAmt = p.humanizeTimingBeats < 0.0 ? 0.0
+                                                  : p.humanizeTimingBeats;
+        for (int i = 0; i < count_; ++i)
+        {
+            const double u = (double) humanizePrngNext (state)
+                           * (1.0 / 4294967296.0); // [0,1)
+            double o = onsets_[i] + (2.0 * u - 1.0) * tAmt;
+            if (o < 0.0) o = 0.0;
+            if (o > beats_) o = beats_;
+            if (i > 0 && o < onsets_[i - 1]) o = onsets_[i - 1];
+            onsets_[i] = o;
+        }
     }
 
     active_ = true;

@@ -72,4 +72,5 @@ deploy.
 Manual REAPER verification (owner) after each build, per plan P4:
 engine on + pair on beat -> run aligned/audible; engine off passthrough;
 jab late-publish; curve/accent/arc sweeps; fold vs zig-zag; cuts on early
-release + loop wrap; save/load round trip; CC87 + CC88..95 with mirroring.
+release + loop wrap; save/load round trip; CC87 + CC88..95 with mirroring;
+humanize on/off + pinned seed replay (overlay seed readout).

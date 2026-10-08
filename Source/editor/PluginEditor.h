@@ -18,7 +18,8 @@ class MidiDragButton;
 //   param rows:  Beats (stepped), Density, Curve, Accent, Arc + readouts
 //                and a "ccNN:VV" bound-CC badge on every CC-mapped control
 //   walk row:    Fold / Zig-zag radios (walk param) + Overlap legato toggle
-//   curve strip: square curve shape preview below the walk row (S9)
+//   curve strip: square curve shape preview + Humanize toggle / Seed field /
+//                humanize strength sliders (S5.9) to the right of it (S9)
 //   rule + "Midi Export" heading
 //   export row:  Start / Target note dropdowns, their velocities, Drag MIDI
 //   scale warn:  red line when Start/Target falls outside the selected scale
@@ -30,6 +31,7 @@ class MidiDragButton;
 // active run (S5.6).
 class RunsEditor : public juce::AudioProcessorEditor,
                    private juce::Slider::Listener,
+                   private juce::TextEditor::Listener,
                    private juce::Timer,
                    private juce::AudioProcessorValueTreeState::Listener
 {
@@ -55,6 +57,10 @@ public:
 private:
     // juce::Slider::Listener: refresh the value readouts
     void sliderValueChanged (juce::Slider*) override;
+    // TextEditor::Listener: the S5.9 Seed field commits on Return / focus
+    // loss (parse + clamp, then through the parameter notify path).
+    void textEditorReturnKeyPressed (juce::TextEditor&) override;
+    void textEditorFocusLost (juce::TextEditor&) override;
     // juce::Timer: mirrors the real engine state (audio->UI FIFO) onto the
     // engine buttons (param echoes must not drive the visuals)
     void timerCallback() override;
@@ -84,6 +90,11 @@ private:
     // Mirrors the walk radio pair from the parameter (Fold has no
     // attachment; D13) - used by the APVTS listener and after a paste.
     void syncWalkRadios();
+    // S5.9 seed field: write the parsed value into the "seed" parameter
+    // (Return / focus loss) and pull the current parameter back into the
+    // field from the 20 Hz timer (skipped while the field has focus).
+    void commitSeed();
+    void refreshSeedText();
     // Transient button-label feedback for the clipboard actions
     void flashButton (juce::TextButton& button, const juce::String& text);
 
@@ -129,6 +140,20 @@ private:
     juce::ToggleButton overlapButton { "Overlap" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
         overlapAttachment;
+
+    // S5.9 humanize cluster (curve strip, right of the preview): the toggle
+    // has an attachment; the seed field edits the "seed" param by hand; the
+    // two strength sliders edit the chunk-only humanize tunables directly
+    // (no APVTS, no badge - none of the three is CC-mappable in v1).
+    juce::ToggleButton humanizeButton { "Humanize" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        humanizeAttachment;
+    juce::Label seedLabel;
+    juce::TextEditor seedEditor;
+    juce::Label hvelName, hvelReadout;
+    juce::Slider hvelSlider;
+    juce::Label htimeName, htimeReadout;
+    juce::Slider htimeSlider;
 
     // Bottom row + its section heading and the rule above the heading (the
     // rule itself is painted by the editor, not a child component).

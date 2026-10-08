@@ -43,6 +43,8 @@ void testDefaults()
     equal ("mode", 0.0f);
     equal ("walk", 1.0f);
     equal ("overlap", 1.0f);
+    equal ("humanize", 0.0f); // S5.9: off by default
+    equal ("seed", 0.0f);     // S5.9: 0 = fresh seed each run
 }
 
 void testStateRoundTrip()

@@ -61,6 +61,15 @@ runsp::RunParams RunsProcessor::makeExportRunParams (double bpm,
     p.alignToGrid = false;
     p.downWeight = juce::jlimit (0.0, 2.0, (double) settings.downWeight);
     p.midBarWeight = juce::jlimit (0.0, 2.0, (double) settings.midBarWeight);
+    // S5.9: humanize rides along the export so the dragged MIDI matches the
+    // live run; seed 0 mints a fresh value, a fixed seed re-renders exactly.
+    p.humanize = real (10, 0.0f, 1.0f) >= 0.5;
+    p.humanizeSeed = p.humanize ? resolveHumanizeSeed (real (11, 0.0f, 999999.0f))
+                                : 0;
+    p.humanizeVelAmt = juce::jlimit (0.0, 0.5,
+        (double) settings.humanizeVelPercent * 0.01);
+    p.humanizeTimingBeats = juce::jlimit (0.0, 1.0,
+        (double) settings.humanizeTimingMs * 0.001 * bpm / 60.0);
     return p;
 }
 

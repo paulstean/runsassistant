@@ -2,6 +2,7 @@
 #include "../editor/PluginEditor.h"
 
 #include <cmath>
+#include <random>
 
 namespace
 {
@@ -27,21 +28,26 @@ constexpr int kCcNone = 255;          // S4 "none" binding sentinel
 constexpr int kCcAllNotesOff = 123;   // S5.6 cut source
 
 // S7 chunk layout: magic "RUN1" + u32 schema_version + raw parameter
-// values (9 in v1, 10 from v2: the Overlap toggle) + settings (source type +
-// engine numbers + 8 bindings + 4 tuning constants + custom mask) + optional
-// trailing RUNV window-size footer. v1 chunks load with Overlap off (S7
-// range-clamps + backwards-compatible read).
+// values (9 in v1, 10 from v2: Overlap, 12 from v3: Humanize + Seed) +
+// settings (source type + engine numbers + 8 bindings + 4 tuning constants
+// + custom mask + 2 humanize tunables from v3) + optional trailing RUNV
+// window-size footer. v1 chunks load with Overlap off, v1/v2 chunks load
+// with Humanize off and the default tunables (S7 range-clamps +
+// backwards-compatible read).
 constexpr uint8_t kChunkMagic[4]  = { 'R', 'U', 'N', '1' };
 constexpr uint8_t kFooterMagic[4] = { 'R', 'U', 'N', 'V' };
-constexpr uint32_t kChunkVersion = 2;
-constexpr uint32_t kChunkMinVersion = 1; // v1 chunks load (Overlap defaults)
+constexpr uint32_t kChunkVersion = 3;
+constexpr uint32_t kChunkMinVersion = 1; // v1 chunks load (defaults fill in)
 constexpr int kParamsV1 = 9;
+constexpr int kParamsV2 = 10;
 constexpr int kSettingsBytes = 1                    // source type
     + 1                                             // engine CC number
     + 3 + 3                                         // engine notes / PCs
     + 8                                             // bound CC table
     + 4 * 4                                         // tuning constants
     + 2;                                            // custom tick set
+constexpr int kSettingsBytesV3 = kSettingsBytes
+    + 4 + 4;                                        // S5.9 humanize tunables
 constexpr int kChunkMinSize = 4                     // magic
     + 4                                             // u32 version
     + kParamsV1 * 4                                 // v1 parameter values (min)
@@ -51,12 +57,13 @@ constexpr int kChunkMinSize = 4                     // magic
 // clipboard JSON and any other id-driven sweep.
 const char* const kParamIds[RunsProcessor::kNumParams] = {
     "engine", "beats", "density", "curve", "accent", "arc",
-    "tonic", "mode", "walk", "overlap"
+    "tonic", "mode", "walk", "overlap", "humanize", "seed"
 };
 
 // Clipboard JSON schema version (S7/S9); bumped when the payload shape
 // changes, older versions still load (chunk-style forward/backward rule).
-constexpr int kClipboardJsonVersion = 1;
+// v2 adds Humanize/Seed params and the two humanize settings keys.
+constexpr int kClipboardJsonVersion = 2;
 
 void writeU32 (juce::MemoryOutputStream& mo, uint32_t v) { mo.write (&v, 4); }
 
@@ -108,6 +115,16 @@ RunsProcessor::RunsProcessor()
         live[i] = ranged[i] != nullptr
                       ? ranged[i]->convertFrom0to1 (ranged[i]->getDefaultValue())
                       : 0.0f;
+
+    // S5.9: session salt for seed 0 (fresh seed each run). Message thread,
+    // so std::random_device is fine here; the audio thread only ever does
+    // fetch_add + splitmix32 on the result.
+    {
+        std::random_device rd;
+        uint32_t s = (uint32_t) rd() ^ 0xA5A5A5A5u;
+        if (s == 0) s = 1;
+        humanizeSeedSalt = s;
+    }
 
     runSink.data = runSinkData;
     runSink.cap = kOutCap;
@@ -192,6 +209,16 @@ RunsProcessor::createParameterLayout()
         juce::AudioParameterBoolAttributes()
             .withStringFromValueFunction (
                 [] (bool v, int) { return juce::String (v ? "On" : "Off"); })));
+    // S5.9: humanize toggle + seed. Seed 0 = fresh seed per run (resolved
+    // at run start, never stored); any other value reproduces that run.
+    // Neither is CC-mappable in v1 (like Overlap - no mirror row, no badge).
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "humanize", 1 }, "Humanize", false,
+        juce::AudioParameterBoolAttributes()
+            .withStringFromValueFunction (
+                [] (bool v, int) { return juce::String (v ? "On" : "Off"); })));
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { "seed", 1 }, "Seed", 0, 999999, 0));
     return layout;
 }
 
@@ -226,14 +253,15 @@ bool RunsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 float RunsProcessor::realValueMinOf (int paramIndex)
 {
     static constexpr float mins[kNumParams] =
-        { 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        { 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
     return paramIndex >= 0 && paramIndex < kNumParams ? mins[paramIndex] : 0.0f;
 }
 
 float RunsProcessor::realValueMaxOf (int paramIndex)
 {
     static constexpr float maxs[kNumParams] =
-        { 2.0f, 16.0f, 16.0f, 1.0f, 1.0f, 1.0f, 11.0f, (float) kNumModes, 1.0f, 1.0f };
+        { 2.0f, 16.0f, 16.0f, 1.0f, 1.0f, 1.0f, 11.0f, (float) kNumModes,
+          1.0f, 1.0f, 1.0f, 999999.0f };
     return paramIndex >= 0 && paramIndex < kNumParams ? maxs[paramIndex] : 0.0f;
 }
 
@@ -244,7 +272,9 @@ bool RunsProcessor::paramIsDiscrete (int paramIndex)
         || paramIndex == 6            // tonic (int)
         || paramIndex == 7            // mode (int indexed)
         || paramIndex == 8            // walk (choice)
-        || paramIndex == kOverlapIndex; // overlap (bool)
+        || paramIndex == kOverlapIndex   // overlap (bool)
+        || paramIndex == kHumanizeIndex  // humanize (bool)
+        || paramIndex == kSeedIndex;     // seed (int)
 }
 
 void RunsProcessor::markStateDirty()
@@ -671,7 +701,8 @@ void RunsProcessor::getStateInformation (juce::MemoryBlock& destData)
     mo.write (kChunkMagic, 4);
     writeU32 (mo, kChunkVersion);
 
-    // All 9 parameters as raw (real) values (S7).
+    // All parameters as raw (real) values (S7), including Humanize/Seed
+    // from schema v3 - the resolved run seed itself is never serialized.
     for (int i = 0; i < kNumParams; ++i)
         writeF32 (mo, ranged[i]->convertFrom0to1 (ranged[i]->getValue()));
 
@@ -690,6 +721,10 @@ void RunsProcessor::getStateInformation (juce::MemoryBlock& destData)
     writeF32 (mo, juce::jlimit (0.0f, 2.0f, settings.downWeight));
     writeF32 (mo, juce::jlimit (0.0f, 2.0f, settings.midBarWeight));
     writeI16 (mo, (int16_t) (settings.customOffsets & 0x0FFF));
+    // v3 tail (S5.9): appended after the v2 settings so v2-shaped prefixes
+    // still read back; readers stop after customOffsets when version < 3.
+    writeF32 (mo, juce::jlimit (0.0f, 50.0f, settings.humanizeVelPercent));
+    writeF32 (mo, juce::jlimit (0.0f, 50.0f, settings.humanizeTimingMs));
 
     // RUNV window-size footer (S7; tolerated-but-optional on read).
     mo.write (kFooterMagic, 4);
@@ -707,8 +742,11 @@ void RunsProcessor::setStateInformation (const void* data, int sizeInBytes)
     const uint32_t version = readU32 (d + 4);
     if (version < kChunkMinVersion || version > kChunkVersion)
         return; // unknown schema: reject, keep current state (S7)
-    // v1: 9 parameters (Overlap defaults); v2: all kNumParams.
-    const int nParams = version >= 2 ? kNumParams : kParamsV1;
+    // v1: 9 parameters (Overlap defaults); v2: 10 (Humanize/Seed defaults);
+    // v3: all kNumParams. Missing trailing params read as 0 = Overlap off,
+    // Humanize off, Seed 0 (S7 backwards-compatible read).
+    const int nParams = version >= 3 ? kNumParams
+                       : (version >= 2 ? kParamsV2 : kParamsV1);
     size_t p = 8;
     auto need = [&] (size_t n) { return (int) (p + n) <= sizeInBytes; };
 
@@ -721,7 +759,9 @@ void RunsProcessor::setStateInformation (const void* data, int sizeInBytes)
     }
 
     runsp::PluginSettings s;
-    if (! need (kSettingsBytes)) return;
+    // v1/v2 settings end after customOffsets; v3 appends the S5.9 tunables.
+    const int settingsBytes = version >= 3 ? kSettingsBytesV3 : kSettingsBytes;
+    if (! need (settingsBytes)) return;
     s.engineSourceType = juce::jlimit (0, 2, (int) d[p++]);
     s.engineNumber = clampByte (d[p++]);
     for (int k = 0; k < 3; ++k) s.engineNoteNumbers[k] = clampByte (d[p++]);
@@ -737,6 +777,14 @@ void RunsProcessor::setStateInformation (const void* data, int sizeInBytes)
     s.midBarWeight = juce::jlimit (0.0f, 2.0f, readF32 (d + p)); p += 4;
     s.customOffsets = (uint16_t) (((int16_t) readI16 (d + p)) & 0x0FFF);
     p += 2;
+    if (version >= 3)
+    {
+        // v3 tail (S5.9); the need() above already covers these 8 bytes.
+        s.humanizeVelPercent = juce::jlimit (0.0f, 50.0f, readF32 (d + p));
+        p += 4;
+        s.humanizeTimingMs = juce::jlimit (0.0f, 50.0f, readF32 (d + p));
+        p += 4;
+    }
 
     // Optional RUNV footer; any other trailing bytes are ignored (S7). A
     // partial footer tail (1..7 bytes after the settings) is a truncated
@@ -815,6 +863,9 @@ juce::String RunsProcessor::stateToJsonText()
     s->setProperty ("downWeight", (double) settings.downWeight);
     s->setProperty ("midBarWeight", (double) settings.midBarWeight);
     s->setProperty ("customOffsets", settings.customOffsets);
+    s->setProperty ("humanizeVelPercent",
+                    (double) settings.humanizeVelPercent);
+    s->setProperty ("humanizeTimingMs", (double) settings.humanizeTimingMs);
     root->setProperty ("settings", juce::var (s.release()));
 
     // Indented output: the text is meant to be human-readable when pasted
@@ -960,6 +1011,13 @@ bool RunsProcessor::applyStateFromJsonText (const juce::String& text,
         if (! number (obj, "customOffsets", v = (double) s.customOffsets))
         { error = "bad settings"; return false; }
         s.customOffsets = (uint16_t) ((int) std::lround (v) & 0x0FFF);
+        // v2 payload keys (S5.9): absent in v1 payloads -> keep current.
+        if (! number (obj, "humanizeVelPercent", v = s.humanizeVelPercent))
+        { error = "bad settings"; return false; }
+        s.humanizeVelPercent = (float) juce::jlimit (0.0, 50.0, v);
+        if (! number (obj, "humanizeTimingMs", v = s.humanizeTimingMs))
+        { error = "bad settings"; return false; }
+        s.humanizeTimingMs = (float) juce::jlimit (0.0, 50.0, v);
     }
 
     // ---- commit: settings first (a Custom-mode tick refresh reads the
@@ -1348,6 +1406,7 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
         publishedEngineState.store (engineState_, std::memory_order_relaxed);
         u.beat = blk.ppqPlaying ? blk.b0 : playhead.virtualBeat();
         u.bpm = blk.bpm;
+        u.runSeed = engine.seedOfLastRun(); // S5.9 overlay seed readout
         uiFifo.push (u); // full FIFO drops (overlay only refreshes later)
     }
 }
@@ -1380,7 +1439,32 @@ runsp::RunParams RunsProcessor::makeRunParams (
     // engine (they used to be stored-but-ignored, engine hard-coded them).
     p.downWeight = juce::jlimit (0.0, 2.0, (double) settings.downWeight);
     p.midBarWeight = juce::jlimit (0.0, 2.0, (double) settings.midBarWeight);
+    // S5.9: humanize toggle + per-run seed (seed 0 mints a fresh value) and
+    // the Settings strengths, with ms -> beats done here at this block's bpm.
+    p.humanize = live[kHumanizeIndex] >= 0.5f;
+    p.humanizeSeed = p.humanize ? resolveHumanizeSeed (live[kSeedIndex]) : 0;
+    p.humanizeVelAmt = juce::jlimit (0.0, 0.5,
+        (double) settings.humanizeVelPercent * 0.01);
+    p.humanizeTimingBeats = juce::jlimit (0.0, 1.0,
+        (double) settings.humanizeTimingMs * 0.001 * blk.bpm / 60.0);
     return p;
+}
+
+uint32_t RunsProcessor::resolveHumanizeSeed (float seedParam) const
+{
+    // S5.9: seed > 0 is explicit and reproducible (no counter use); seed 0
+    // mints a fresh one from the session-salted counter. RT-safe by
+    // construction: one relaxed fetch_add + pure splitmix32 math, no locks,
+    // no allocation - safe from the audio thread (startRun) and from the
+    // message thread (offline export) alike; unique slots mean unique seeds.
+    const int seedVal = (int) std::lround (
+        juce::jlimit (0.0f, 999999.0f, seedParam));
+    if (seedVal > 0)
+        return (uint32_t) seedVal;
+    uint32_t slot = humanizeSeedSalt
+        + humanizeSeedCounter.fetch_add (1, std::memory_order_relaxed);
+    const uint32_t s = runsp::humanizePrngNext (slot);
+    return s != 0 ? s : 1; // 0 is reserved for "humanize off" in the overlay
 }
 
 juce::AudioProcessorEditor* RunsProcessor::createEditor()

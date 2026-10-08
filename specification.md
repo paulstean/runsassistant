@@ -155,6 +155,12 @@ bindings are inert.
 | 8 | Mode | index into mode list | Major | 94 |
 | 9 | Walk mode | Fold / Zig-zag | Zig-zag | 95 |
 | 10 | Note overlap | Off / On | On | none (not CC-mappable in v1) |
+| 11 | Humanize | Off / On | Off | none (not CC-mappable in v1) |
+| 12 | Seed | 0..999999, integer | 0 | none (not CC-mappable in v1) |
+
+Rows 11/12 are the S5.9 humanization pair: Humanize enables it, Seed 0 mints
+a fresh seed per run and any other value reproduces the run exactly. They have
+no CC binding (the bindings table stays eight rows wide, like row 10 in v1).
 
 CC value mapping for continuous parameters: linear scale CC 0..127 to the parameter
 range. Tonic: floor(CC x 12 / 128). Mode: floor(CC x nmodes / 128). Walk: 0..63 =
@@ -178,8 +184,11 @@ Settings (chunk state, not host parameters in v1):
   PC numbers).
 * Per-parameter bound CC numbers (table above), each may be "none".
 * Alignment epsilon (section 5.1), accent falloff constants (section 5.7),
-  note gate fraction (section 5.8) - visible in Settings as raw numeric fields with
-  defaults; tuning knobs, not performance controls.
+  note gate fraction (section 5.8) - visible
+  in Settings as raw numeric fields with defaults; tuning knobs, not
+  performance controls. The two humanize strengths (section 5.9) are the
+  same kind of chunk-only tuning state but live on the main panel as
+  sliders next to the Humanize controls (section 9), not in the dialog.
 
 Duplicate CC assignments in the bindings table are refused in the UI with a
 warning badge (including the engine CC).
@@ -269,6 +278,11 @@ final note: no fixed gate - held (tail-end steady, section 5.6)
 ```
 
 (curve_map is defined in section 5.5.)
+
+The plan above is the deterministic assembly (Humanize off). With Humanize on
+(5.9) the assembled `vel_i` values are further deflected and the `onset_i`
+values jittered - but `accent_i`/`falloff_i`/`weight` keep using the
+un-jittered positions, so the metric emphasis still describes the grid.
 
 If `n - 1 < scale degree count in span` the run is under-filled: only `n` notes
 are emitted, spread as a proportional stride map across the whole span (the
@@ -386,6 +400,52 @@ they are not free-standing constants.
   documented rule. The debug overlay counts late-published singles, zig-zag parity
   drops, and cuts.
 
+### 5.9 Humanization
+
+Host parameters 11/12 (section 4) plus two strength sliders over chunk-only
+settings state (section 9). With **Humanize
+off** (default) a run is exactly the deterministic assembly of 5.3-5.8 - the
+randomness fields are inert no matter what they carry. With Humanize on:
+
+* **Strengths** travel with the run's parameter block like the 5.7 accent
+  weights: velocity deflection percent (H.vel slider, default 10, range
+  0..50) and
+  timing deviation in milliseconds (H.time slider, default 8, range 0..50).
+  Both are chunk-only tuning state - no host parameter, no CC mirror - and the
+  processor converts ms to beats at the block's bpm before the run sees it.
+* **Seed** (parameter 12): a value above 0 IS the run's seed - every run with
+  that seed and those strengths replays the identical pattern. Seed 0 means
+  "fresh seed each run": the processor derives one from a session-salted
+  splitmix32 counter at run start (RT-safe: one atomic fetch_add plus pure
+  integer math), never persists it, and reports the seed actually used through
+  the UI FIFO. The debug overlay prints it, so a seed-0 run can be pinned by
+  typing that number back into the Seed field. The resolved seed is a property
+  of the live run only - chunks and clipboard payloads carry the seed PARAMETER
+  (default 0), never a resolved value.
+* **PRNG:** one splitmix32 stream seeded with the run's seed, consumed in
+  fixed layout so a seed always yields the same pattern for a given note
+  count: first n draws deflect velocities (note order), then n draws jitter
+  onsets (note order). Draw counts do not depend on the strengths, so changing
+  a tunable reshapes but never reorders the pattern family.
+* **Velocity:** after the full 5.3 stack (base x arc x accent, computed from
+  the un-jittered positions), each note's velocity becomes
+  `clamp(round(vel_i x (1 + a x (2u_i - 1))), 1, 127)` with a = deflection
+  percent / 100 and u_i the draw - a relative push of up to +-a.
+* **Timing:** `onset_i` gains `(2u'_i - 1) x t` beats, t = ms x bpm / 60000,
+  then each onset is clamped into `[0, beats]` and forced non-decreasing
+  (`onset_i = max(onset_i, onset_{i-1})`), so note order never inverts, no
+  note lands before the run start or past its end, and the 5.8/5.6
+  off-before-on contracts survive. Everything downstream derives from the
+  jittered onsets: gates, overlap overhangs, note-offs, cut beats. Grid lock
+  (5.1), snapping, walk, parity drops and accent weights are untouched - the
+  run START stays on its grid position; only the notes inside it move.
+* **Determinism rule:** same seed + same parameter/settings state in, same run
+  out - on the audio thread, a fresh session and the offline export alike
+  (the export resolves its own seed the same way, so a pinned seed renders
+  byte-identical files).
+* Humanize is not CC-mappable in v1 (like Overlap): no binding row, no badge,
+  no CC mirror.
+
 ---
 
 ## 6. Processor specification
@@ -405,7 +465,8 @@ they are not free-standing constants.
 5. Run scheduler: emit due run note-ons and note-offs at computed offsets; apply
    cut rules (5.6) for releases / discontinuities pending from this block.
 6. Publish engine-to-UI state (engine state, active run pitch walk index, last
-   emitted pitch/velocity, counters) through the lock-free FIFO.
+   emitted pitch/velocity, the seed the started run used (5.9), counters)
+   through the lock-free FIFO.
 
 ### 6.2 Real-time rules
 
@@ -421,8 +482,10 @@ Chunk: magic `RUN1` + u32 schema_version + all parameters (section 4) + settings
 size footer `RUNV`, same pattern as Eloquent). Validation: magic + version check,
 range-clamp every field, ignore trailing bytes, reject truncated chunks (keep
 current state). Schema v2 adds the Overlap parameter; v1 chunks load with
-Overlap off. Runtime state (pending pair notes, active run, PRNG) is never
-persisted. No text preset files in v1. Every parameter edit marks the
+Overlap off. Schema v3 adds the Humanize/Seed parameters and the two humanize
+tunables (v1/v2 chunks load with Humanize off, Seed 0 and the tunables at
+their defaults). Runtime state (pending pair notes, active run, PRNG state and
+the resolved humanize seed) is never persisted. No text preset files in v1. Every parameter edit marks the
 host state dirty (VST3 dirty flag / CLAP `stateMarkDirty`) except pure GUI
 geometry. The engine switch (GUI, CC, keyswitch, PC) mirrors into the Engine
 parameter for the host dirty/notification path, and pending CC mirrors are
@@ -446,7 +509,8 @@ every present field, keep absent fields), so a bad clipboard changes nothing.
 Section 4's table is exposed verbatim: Engine (discrete 3), Beats (int 1..16),
 Density (float 1..16), Curve (float 0..1), Accent (float 0..1), Arc (float -1..+1),
 Tonic (int 0..11 with value-to-string), Mode (int indexed), Walk (bool/discrete 2),
-Overlap (bool). Settings and CC bindings are chunk-only, never parameters.
+Overlap (bool), Humanize (bool), Seed (int 0..999999). Settings and CC bindings
+are chunk-only, never parameters.
 
 ---
 
@@ -467,6 +531,7 @@ No list, no playhead display.
 | Curve   [==o-------] 22%   Accent [===o-----] 41%    Arc [==o-----] +15%    |
 | Walk: ( ) Fold  (x) Zig-zag   Overlap: [x] On                              |
 | [ curve preview: smooth curve bottom-left to top-right (Up), mirrored for Down ] |
+|   Humanize [ ]  Seed [ 0 ]  H.vel [====] 10%  H.time [====] 8 ms           |
 +----------------------------------------------------------------------------+
 | Midi Export                                                                |
 | Start [C4 v] v[======] 100   Target [C5 v] v[======] 90      [Drag MIDI]   |
@@ -508,6 +573,22 @@ No list, no playhead display.
   playhead cursor.
 * **Overlap toggle:** Off/On checkbox next to the walk radios (host parameter,
   saved in the chunk); see 5.8 for the emission rule.
+* **Humanize toggle + Seed field + strength sliders (5.9):** sit in the
+  curve-shape strip, to the right of the preview (no extra window height).
+  The toggle is a host parameter with an attachment (GUI / automation /
+  chunk both ways); the Seed field is a
+  numeric text box committing on Return or focus loss through the normal
+  parameter-notify path (0..999999, clamped). Neither carries a CC badge (not
+  CC-mappable in v1). To the right of the seed field sit the two strength
+  sliders: H.vel (velocity deflection percent, 0..50, default 10) and H.time
+  (timing deviation ms, 0..50, default 8). They are chunk-only tuning state -
+  no host parameter, no CC badge, edits mark the host state dirty (7) - and
+  write the same settings fields the run's parameter block carries; a double
+  click resets a slider to its default, and the 20 Hz mirror keeps the pair
+  in step with chunk loads, pastes and Settings-dialog resets. Tooltips
+  explain that seed 0 draws a fresh seed each run while a pinned seed
+  reproduces it; the debug overlay prints the seed of the last started run
+  for pinning.
 * **Export row (offline render, drag to the arrange window):** `Start` and
   `Target` note dropdowns (C1..C8, defaults C4 / C5), one velocity slider each
   (1..127, defaults 100 / 90) and a **Drag MIDI** button. All four inputs are
@@ -542,13 +623,15 @@ No list, no playhead display.
 * **Settings dialog:** engine source type (Notes / CC / PC) + its event numbers;
   per-parameter CC bindings table with conflict prevention; tuning constants
   (alignment epsilon, gate fraction, downbeat weight, mid-bar beat weight);
-  Reset to defaults.
+  Reset to defaults. The two humanize strength tunables are not in the dialog
+  - they live on the main panel as sliders (5.9).
 * **Copy to Clipboard / Paste from Clipboard:** bottom-row buttons that move the
   whole state through the system clipboard as indented JSON text. The payload is
   the chunk's data, keyed by parameter id: a `params` object with every
   parameter as a real value (engine, beats, density, curve, accent, arc, tonic,
-  mode, walk, overlap) plus a `settings` object (engine source type and numbers,
-  the eight CC bindings, the four tuning constants, the custom tick set), wrapped
+  mode, walk, overlap, humanize, seed) plus a `settings` object (engine source
+  type and numbers, the eight CC bindings, the six tuning constants, the custom
+  tick set), wrapped
   with `format: "runs-assistant"` and a schema `version`. Copy flushes pending
   CC mirrors first, so the text carries the last held control values. Paste
   accepts only its own format and schema version, applies through the normal
@@ -560,7 +643,8 @@ No list, no playhead display.
   Runs Assistant Instances`.
 * **Debug overlay:** engine state, pending note (if any), active run progress
   (last emitted pitch/velocity, notes emitted / n), counters (parity drops,
-  late-published singles, cuts), current playhead beat and bpm.
+  late-published singles, cuts), current playhead beat, bpm and the seed of the
+  last started run (5.9; line hidden while Humanize is off).
 * Keyboard: nothing special required; Esc closes Settings. Screen-reader labels on
   all controls.
 
@@ -575,8 +659,14 @@ No list, no playhead display.
   velocity stack math + clamps, accent falloff at exact/half-beat distances,
    gate math, tail-end hold of the final note until trigger release,
    cut semantics (each condition of 5.6), zig-zag parity drop counter,
-  chunk round-trip + truncated rejection, clipboard JSON round-trip +
-  foreign/incompatible text rejection + clamp-on-paste.
+   humanize: same seed reproduces the plan bit-for-bit, different seeds
+   differ, off = the plain deterministic plan regardless of strengths,
+   velocity stays 1..127 and onsets stay in [0, beats] in note order,
+   seed resolution through processBlock (seed 0 fresh nonzero per run,
+   pinned seed verbatim, 0 when humanize is off), seed-0/fixed-seed
+   determinism of the emitted note-ons, chunk round-trip + truncated
+   rejection + v1/v2 schema back-compat (humanize fields absent), clipboard
+   JSON round-trip + foreign/incompatible text rejection + clamp-on-paste.
 * Real-time gates: `pluginval` strict all formats; no-allocation instrumented
   processBlock run.
 * REAPER manual checklist (per build): engine on, pair triggers on the beat ->
@@ -585,7 +675,11 @@ No list, no playhead display.
   curve slider sweep audible (spacing sane); accent audible against a click;
   fff->ppp across the pair velocities; arc sweep; fold vs zig-zag audible on an
   over-dense run; cut on early release; loop wrap cuts; save/load round trip;
-  CC87 + CC88..95 remote control with GUI mirroring; Copy to Clipboard /
+   CC87 + CC88..95 remote control with GUI mirroring; Humanize on -> run
+   sways audibly off the grid (velocity + timing), H.vel / H.time slider
+   sweep changes the sway strength (and survives save/load), seed 0 vs
+   pinned seed
+   (pinned seed repeats the exact sway, overlay shows it); Copy to Clipboard /
   Paste from Clipboard restores the whole state (and clamps a hand-edited
   value).
 * Acceptance for v1 is the REAPER pass plus CI green; other hosts compile-load
@@ -613,8 +707,7 @@ No list, no playhead display.
 
 ## 12. Deferred v2
 
-Pair window length + grace-note timeout; velocity humanization (per-note random
-deflection); negative
+Pair window length + grace-note timeout; negative
 curve direction (fast start); chord/trill ornaments in runs; scale inference from
 the trigger pair; text preset files; undo manager; light theme + full theme
 editor; AAX; Linux release binaries; per-channel run state (several pairs at
@@ -711,6 +804,15 @@ planned behavior, the shipped behavior, and the reason.
     pending mirror FIFO first, and the mirror Timer is started from the
     editor; a bound-CC tweak with the editor closed still lands in the
     chunk at the next save because the flush runs inside the state write.
+
+16. **Humanize/Seed (S5.9).** Deferred to v2 in S12 as "velocity
+    humanization"; promoted to v1 at the owner request (velocity AND timing,
+    strengths as main-panel H.vel/H.time sliders over chunk-only state).
+    Shipped as host parameter rows 11/12,
+    chunk schema v3, no CC binding (bindings table stays 8 rows, same as the
+    Overlap exception in item 12). The resolved run seed is runtime state
+    (never serialized); only the seed parameter (default 0 = fresh per run)
+    persists.
 
 ---
 

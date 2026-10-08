@@ -694,3 +694,151 @@ TEST_CASE (engine_accent_bar_origin_and_weights)
     }
 }
 
+
+// S5.9 humanization: seeded velocity deflection + onset jitter. The engine
+// must be exactly reproducible per seed, bounded, order-preserving, and
+// inert (byte-for-byte the deterministic plan) when humanize is off.
+namespace
+{
+struct Plan
+{
+    std::vector<int> vels;
+    std::vector<double> onsets;
+};
+
+Plan capturePlan (const RunEngine& e)
+{
+    Plan plan;
+    for (int i = 0; i < e.noteCount(); ++i)
+    {
+        plan.vels.push_back (e.velocityOf (i));
+        plan.onsets.push_back (e.onsetOf (i));
+    }
+    return plan;
+}
+
+RunParams humanizedParams (double amt, double timing, uint32_t seed)
+{
+    RunParams p = basicParams (8.0, 4); // n = 32 notes
+    p.humanize = true;
+    p.humanizeSeed = seed;
+    p.humanizeVelAmt = amt;
+    p.humanizeTimingBeats = timing;
+    return p;
+}
+} // namespace
+
+TEST_CASE (engine_humanize_off_is_inert)
+{
+    // Humanize off: the extra RunParams fields must be ignored entirely,
+    // even when they carry wild strengths (the processor passes 0 amounts
+    // only for tidiness - off means off regardless).
+    RunEngine base, off;
+    RunParams p0 = basicParams (8.0, 4);
+    RunParams p1 = basicParams (8.0, 4);
+    p1.humanize = false;
+    p1.humanizeSeed = 123456u;
+    p1.humanizeVelAmt = 0.5;
+    p1.humanizeTimingBeats = 0.2;
+    CHECK (base.startRun (trig (60, 72, 2.0), p0));
+    CHECK (off.startRun (trig (60, 72, 2.0), p1));
+    CHECK_EQ (base.noteCount(), off.noteCount());
+    const Plan a = capturePlan (base), b = capturePlan (off);
+    CHECK (a.vels == b.vels);
+    CHECK (a.onsets == b.onsets);
+    CHECK_EQ (off.seedOfLastRun(), 0u); // seed reported only when humanize ran
+    base.cancel();
+    off.cancel();
+}
+
+TEST_CASE (engine_humanize_same_seed_reproduces)
+{
+    const RunParams p = humanizedParams (0.3, 0.1, 424242u);
+    RunEngine e1, e2;
+    CHECK (e1.startRun (trig (60, 72, 2.0), p));
+    CHECK (e2.startRun (trig (60, 72, 2.0), p));
+    CHECK_EQ (e1.noteCount(), e2.noteCount());
+    const Plan a = capturePlan (e1), b = capturePlan (e2);
+    CHECK (a.vels == b.vels);
+    CHECK (a.onsets == b.onsets);
+    CHECK_EQ (e1.seedOfLastRun(), 424242u);
+    // The humanized plan must actually differ from the deterministic one,
+    // otherwise the test proves nothing.
+    RunEngine d;
+    RunParams p0 = basicParams (8.0, 4);
+    CHECK (d.startRun (trig (60, 72, 2.0), p0));
+    const Plan plain = capturePlan (d);
+    CHECK (a.vels != plain.vels);
+    bool moved = false;
+    for (int i = 0; i < (int) a.onsets.size(); ++i)
+        if (std::fabs (a.onsets[(size_t) i] - plain.onsets[(size_t) i]) > 1e-9)
+            moved = true;
+    CHECK (moved);
+    e1.cancel(); e2.cancel(); d.cancel();
+}
+
+TEST_CASE (engine_humanize_diff_seed_varies)
+{
+    // Two seeds over the same run must not produce the same plan (the
+    // draws feed both the velocity and the timing stream).
+    const Plan a = [] {
+        RunEngine e;
+        CHECK (e.startRun (trig (60, 72, 2.0), humanizedParams (0.4, 0.1, 1u)));
+        const Plan p = capturePlan (e);
+        e.cancel();
+        return p;
+    }();
+    const Plan b = [] {
+        RunEngine e;
+        CHECK (e.startRun (trig (60, 72, 2.0),
+                           humanizedParams (0.4, 0.1, 999983u)));
+        const Plan p = capturePlan (e);
+        e.cancel();
+        return p;
+    }();
+    CHECK (a.vels != b.vels);
+    CHECK (a.onsets != b.onsets);
+}
+
+TEST_CASE (engine_humanize_bounds_and_order)
+{
+    // Velocity: deflected values stay inside 1..127 even at extreme base
+    // velocities and the maximum 50 percent deflection. Timing: every
+    // onset stays inside [0, beats] and the plan stays non-decreasing, for
+    // both curve ends (the order fix-up is what protects the S5.8
+    // off-before-on contract).
+    for (double curve : { 0.0, 1.0 })
+    {
+        for (uint32_t seed : { 7u, 20260101u, 900001u })
+        {
+            RunEngine e;
+            RunParams p = humanizedParams (0.5, 0.25, seed);
+            p.curveStrength = curve;
+            CHECK (e.startRun (trig (60, 72, 1.0), p));
+            double prev = -1.0;
+            for (int i = 0; i < e.noteCount(); ++i)
+            {
+                const int v = e.velocityOf (i);
+                CHECK (v >= 1 && v <= 127);
+                const double o = e.onsetOf (i);
+                CHECK (o >= 0.0 && o <= (double) p.beats);
+                CHECK (o >= prev); // note order never inverts
+                prev = o;
+            }
+            e.cancel();
+        }
+    }
+    // Boundary bases: velocity 1 (deflection floor) and 127 (ceiling).
+    for (int edge : { 1, 127 })
+    {
+        RunEngine e;
+        RunParams p = humanizedParams (0.5, 0.0, 777u);
+        CHECK (e.startRun (trig (60, 72, 0.0, Direction::Up, edge, edge), p));
+        for (int i = 0; i < e.noteCount(); ++i)
+        {
+            const int v = e.velocityOf (i);
+            CHECK (v >= 1 && v <= 127);
+        }
+        e.cancel();
+    }
+}

@@ -44,6 +44,11 @@ struct PluginSettings
     float downWeight = 1.0f;                  // S5.7 v1 tunables
     float midBarWeight = 0.75f;
     uint16_t customOffsets = 0x0AB5;          // S9 custom tick set (relative tonic)
+    // S5.9 humanize tunables (chunk schema v3 tail; v1/v2 chunks load the
+    // defaults). Percent of the note's own velocity, and max onset jitter
+    // in milliseconds - both fed to the engine per run.
+    float humanizeVelPercent = 10.0f;
+    float humanizeTimingMs = 8.0f;
 };
 
 // S6.1 step 6: engine-to-UI state message (small, trivially copyable).
@@ -67,6 +72,7 @@ struct UiMessage
     int engineListenerHits = 0; // diagnostics: APVTS listener hits
     double beat = 0.0;          // current playhead beat / virtual beat (S9)
     double bpm = 120.0;
+    uint32_t runSeed = 0;       // S5.9 seed of the last started run (0 = off)
 };
 
 // S11 mitigation: audio thread must not notify the host; it pushes mirror
@@ -211,9 +217,11 @@ public:
     };
     PlayheadSnapshot playheadSnapshot;
 
-    static constexpr int kNumParams = 10;
+    static constexpr int kNumParams = 12;
     static constexpr int kEngineIndex = 0;
-    static constexpr int kOverlapIndex = 9; // S5.8 overlap toggle
+    static constexpr int kOverlapIndex = 9;   // S5.8 overlap toggle
+    static constexpr int kHumanizeIndex = 10; // S5.9 humanize toggle
+    static constexpr int kSeedIndex = 11;     // S5.9 humanize seed (0 = fresh)
 
     // S4 parameter real-value ranges shared by the CC mapping (D13) and the
     // chunk clamps (S7).
@@ -282,9 +290,10 @@ private:
     // APVTS (S4). normSeen must never coincide with a legal first value, so
     // ALL slots start at -1 (a zero-init here masked the overlap bool's
     // first change in the live[] sync and pinned runs to the old default).
-    float live[kNumParams]       = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0 };
+    float live[kNumParams]       = { 0, 4, 4, 0.5f, 0.5f, 0, 0, 0, 0, 0, 0, 0 };
     float normSeen[kNumParams]   = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
-                                     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+                                     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                                     -1.0f, -1.0f };
 
     double sampleRate_ = 48000.0;
     int lastBlockSamples_ = 512;
@@ -329,6 +338,13 @@ private:
 
     runsp::PairTracker pairs;
     runsp::RunEngine engine;
+
+    // S5.9 seed resolution (RT-safe: one atomic fetch_add + pure math).
+    // salt randomised once in the ctor so two sessions starting from the
+    // same counter mint different seeds; seed > 0 passes through unchanged.
+    mutable std::atomic<uint32_t> humanizeSeedCounter { 0 };
+    uint32_t humanizeSeedSalt = 1;
+    uint32_t resolveHumanizeSeed (float seedParam) const;
 
     // Scratch (fixed capacity, preallocated at construction; prepareToPlay
     // only resets them).

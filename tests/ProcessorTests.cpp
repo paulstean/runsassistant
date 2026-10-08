@@ -753,6 +753,8 @@ void tuneChunkDefaults (RunsProcessor& p)
     setParam (p, "mode", 10.0f);
     setParam (p, "walk", 1.0f);
     setParam (p, "overlap", 1.0f);
+    setParam (p, "humanize", 1.0f);
+    setParam (p, "seed", 424242.0f);
     p.settings.engineSourceType = 2;
     p.settings.engineNumber = 90;
     p.settings.engineNoteNumbers[0] = 40;
@@ -768,18 +770,27 @@ void tuneChunkDefaults (RunsProcessor& p)
     p.settings.downWeight = 1.25f;
     p.settings.midBarWeight = 0.5f;
     p.settings.customOffsets = 0x0555;
+    p.settings.humanizeVelPercent = 17.5f;
+    p.settings.humanizeTimingMs = 11.25f;
     p.recordEditorWindowSize (1000, 500);
 }
 
 bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b,
                           bool withOverlap = true)
 {
+    // withOverlap also gates the S5.9 state (Humanize/Seed params and the
+    // two humanize tunables): a v1/v2 payload predates all of it.
     bool ok = true;
     const char* ids[RunsProcessor::kNumParams] = { "engine", "beats", "density",
-        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap" };
+        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap",
+        "humanize", "seed" };
     for (int i = 0; i < RunsProcessor::kNumParams; ++i)
     {
-        if (! withOverlap && i == RunsProcessor::kOverlapIndex) continue;
+        if (! withOverlap
+            && (i == RunsProcessor::kOverlapIndex
+                || i == RunsProcessor::kHumanizeIndex
+                || i == RunsProcessor::kSeedIndex))
+            continue;
         if (std::fabs (paramReal (a, ids[i]) - paramReal (b, ids[i])) > 1e-4f)
             ok = false;
     }
@@ -790,6 +801,10 @@ bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b,
         || a.settings.downWeight != b.settings.downWeight
         || a.settings.midBarWeight != b.settings.midBarWeight
         || a.settings.customOffsets != b.settings.customOffsets)
+        return false;
+    if (withOverlap
+        && (a.settings.humanizeVelPercent != b.settings.humanizeVelPercent
+            || a.settings.humanizeTimingMs != b.settings.humanizeTimingMs))
         return false;
     for (int k = 0; k < 3; ++k)
         if (a.settings.engineNoteNumbers[k] != b.settings.engineNoteNumbers[k]
@@ -803,9 +818,10 @@ bool chunkValuesRetained (RunsProcessor& a, RunsProcessor& b,
 bool allDefaults (const RunsProcessor& p)
 {
     const char* ids[RunsProcessor::kNumParams] = { "engine", "beats", "density",
-        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap" };
+        "curve", "accent", "arc", "tonic", "mode", "walk", "overlap",
+        "humanize", "seed" };
     const float defaults[RunsProcessor::kNumParams] =
-        { 1, 4, 5, 0.22f, 0.41f, 0.15f, 0, 0, 1, 1 };
+        { 1, 4, 5, 0.22f, 0.41f, 0.15f, 0, 0, 1, 1, 0, 0 };
     bool ok = true;
     for (int i = 0; i < RunsProcessor::kNumParams; ++i)
     {
@@ -820,7 +836,9 @@ bool allDefaults (const RunsProcessor& p)
         && p.settings.gateFraction == d.gateFraction
         && p.settings.downWeight == d.downWeight
         && p.settings.midBarWeight == d.midBarWeight
-        && p.settings.customOffsets == d.customOffsets;
+        && p.settings.customOffsets == d.customOffsets
+        && p.settings.humanizeVelPercent == d.humanizeVelPercent
+        && p.settings.humanizeTimingMs == d.humanizeTimingMs;
     for (int k = 0; k < 3 && sOk; ++k)
         sOk = p.settings.engineNoteNumbers[k] == d.engineNoteNumbers[k]
            && p.settings.enginePcNumbers[k] == d.enginePcNumbers[k];
@@ -900,25 +918,70 @@ void testChunkVersionRejected()
 void testChunkV1BackwardCompatible()
 {
     // A v1 chunk (9 parameters, schema 1, the P0..P4 project layout) loads
-    // with Overlap off and everything else intact (S7 v2 reader).
+    // with Overlap / Humanize / Seed at their off defaults and everything
+    // else intact (S7 backwards-compatible reader; its settings blob ends
+    // after the v1/v2 tail, no humanize tunables).
     RunsProcessor a;
     tuneChunkDefaults (a);
     juce::MemoryBlock data;
     a.getStateInformation (data);
     std::vector<uint8_t> blob ((uint8_t*) data.getData(),
                                (uint8_t*) data.getData() + data.getSize());
-    // overwrite the v2 chunk with: version = 1 and the Overlap float (last
-    // of the 10 param slots, offset 8 + 9*4) shifted out.
+    // Rewrite the v3 chunk as v1: version 1, the three v2/v3-only param
+    // floats (Overlap/Humanize/Seed, starting at 8 + 9*4) shifted out, then
+    // the v3-only 8-byte humanize settings tail (after the 34-byte v1/v2
+    // settings) shifted out in front of the RUNV footer.
     const uint32_t v = 1;
     std::memcpy (blob.data() + 4, &v, 4);
-    const size_t overlapAt = 8 + 9 * 4;
-    std::memmove (blob.data() + overlapAt, blob.data() + overlapAt + 4,
-                  blob.size() - overlapAt - 4);
-    blob.resize (blob.size() - 4);
+    const size_t extraParamsAt = 8 + 9 * 4;
+    const size_t extraParamsBytes = 3 * 4;
+    std::memmove (blob.data() + extraParamsAt,
+                  blob.data() + extraParamsAt + extraParamsBytes,
+                  blob.size() - extraParamsAt - extraParamsBytes);
+    blob.resize (blob.size() - extraParamsBytes);
+    const size_t v3TailAt = extraParamsAt + 34; // v1 settings = 34 bytes
+    std::memmove (blob.data() + v3TailAt, blob.data() + v3TailAt + 8,
+                  blob.size() - v3TailAt - 8);
+    blob.resize (blob.size() - 8);
     RunsProcessor b;
     b.setStateInformation (blob.data(), (int) blob.size());
-    CHECK (chunkValuesRetained (a, b, false)); // everything except Overlap
-    CHECK (paramReal (b, "overlap") == 0.0f); // v1 chunk: Overlap off (S7)
+    CHECK (chunkValuesRetained (a, b, false)); // minus the v2/v3-only state
+    CHECK (paramReal (b, "overlap") == 0.0f);  // v1 chunk: Overlap off (S7)
+    CHECK (paramReal (b, "humanize") == 0.0f); // v1 chunk: Humanize off
+    CHECK (paramReal (b, "seed") == 0.0f);     // v1 chunk: Seed 0
+}
+
+void testChunkV2BackwardCompatible()
+{
+    // A v2 chunk (10 parameters, pre-humanize schema) loads with Humanize
+    // off / Seed 0 and the default humanize tunables, everything else
+    // intact.
+    RunsProcessor a;
+    tuneChunkDefaults (a);
+    juce::MemoryBlock data;
+    a.getStateInformation (data);
+    std::vector<uint8_t> blob ((uint8_t*) data.getData(),
+                               (uint8_t*) data.getData() + data.getSize());
+    const uint32_t v = 2;
+    std::memcpy (blob.data() + 4, &v, 4);
+    const size_t extraParamsAt = 8 + 10 * 4; // Humanize/Seed floats
+    const size_t extraParamsBytes = 2 * 4;
+    std::memmove (blob.data() + extraParamsAt,
+                  blob.data() + extraParamsAt + extraParamsBytes,
+                  blob.size() - extraParamsAt - extraParamsBytes);
+    blob.resize (blob.size() - extraParamsBytes);
+    const size_t v3TailAt = extraParamsAt + 34; // v2 settings = 34 bytes
+    std::memmove (blob.data() + v3TailAt, blob.data() + v3TailAt + 8,
+                  blob.size() - v3TailAt - 8);
+    blob.resize (blob.size() - 8);
+    RunsProcessor b;
+    b.setStateInformation (blob.data(), (int) blob.size());
+    CHECK (chunkValuesRetained (a, b, false));
+    CHECK (paramReal (b, "humanize") == 0.0f);
+    CHECK (paramReal (b, "seed") == 0.0f);
+    runsp::PluginSettings d;
+    CHECK (b.settings.humanizeVelPercent == d.humanizeVelPercent);
+    CHECK (b.settings.humanizeTimingMs == d.humanizeTimingMs);
 }
 
 void testJsonClipboardRoundTrip()
@@ -931,6 +994,8 @@ void testJsonClipboardRoundTrip()
     const juce::String text = a.stateToJsonText();
     CHECK (text.contains ("\"runs-assistant\""));
     CHECK (text.contains ("\"customOffsets\""));
+    CHECK (text.contains ("\"humanize\""));          // S5.9 params (v2 JSON)
+    CHECK (text.contains ("\"humanizeVelPercent\"")); // S5.9 settings keys
     RunsProcessor b;
     juce::String error;
     CHECK (b.applyStateFromJsonText (text, error));
@@ -980,13 +1045,15 @@ void testJsonClipboardPartialAndClamped()
     CHECK (p.applyStateFromJsonText (
         "{\"format\":\"runs-assistant\",\"version\":1,"
         "\"params\":{\"beats\":99,\"curve\":-4.0,\"tonic\":7,"
-        "\"density\":99.0}}", error));
+        "\"density\":99.0,\"humanize\":1,\"seed\":1234567}}", error));
     CHECK (error.isEmpty());
     CHECK_EQ ((int) paramReal (p, "beats"), 16);      // clamped to 1..16
     CHECK_NEAR (paramReal (p, "curve"), 0.0f, 1e-6);  // clamped to 0..1
     CHECK_NEAR (paramReal (p, "density"), 16.0f, 1e-6);
     CHECK_EQ ((int) paramReal (p, "tonic"), 7);       // in range: applied
     CHECK_NEAR (paramReal (p, "accent"), 0.75f, 1e-4); // absent: untouched
+    CHECK_NEAR (paramReal (p, "humanize"), 1.0f, 1e-6); // S5.9 bool: applied
+    CHECK_NEAR (paramReal (p, "seed"), 999999.0f, 1e-6); // clamped 0..999999
     CHECK (p.settings.engineNumber == 90);            // settings absent too
 }
 
@@ -1371,6 +1438,102 @@ void testAccentWeightsReachEngine()
         CHECK_EQ (v, 50); // weights 0 -> no accent push anywhere
 }
 
+// S5.9: seed resolution end-to-end through processBlock. Seed 0 mints a
+// fresh nonzero seed per run (the overlay prints it so a run can be pinned
+// and redone); a pinned seed passes through verbatim; humanize off reports
+// 0. Two runs on one processor: release the triggers to cut run 1 (S5.6)
+// before the second pair.
+void testHumanizeSeedResolution()
+{
+    auto configure = [] (RunsProcessor& p, float humanize, float seed)
+    {
+        p.prepareToPlay (44100.0, 2048);
+        setUpMatrix (p);
+        setParam (p, "humanize", humanize);
+        setParam (p, "seed", seed);
+    };
+    auto fireRun = [] (RunsProcessor& p, Runner& r)
+    {
+        r.step (&bufferOf ({
+            { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+            { 0, juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100) },
+        }));
+        r.runEmpty (4); // run starts and publishes its UiMessage
+        return p.latestUiState().runSeed;
+    };
+    auto releaseTriggers = [] (Runner& r)
+    {
+        r.step (&bufferOf ({
+            { 0, juce::MidiMessage::noteOff (1, 60, (juce::uint8) 0) },
+            { 0, juce::MidiMessage::noteOff (1, 72, (juce::uint8) 0) },
+        }));
+        r.runEmpty (2); // trigger release cuts the run (S5.6)
+    };
+
+    // (1) seed 0: two runs on the same processor report different nonzero
+    // seeds (the session counter advances per run).
+    {
+        RunsProcessor p;
+        configure (p, 1.0f, 0.0f);
+        Runner r (p, 2048);
+        r.startAt (0.0);
+        const uint32_t s1 = fireRun (p, r);
+        releaseTriggers (r);
+        const uint32_t s2 = fireRun (p, r);
+        CHECK (s1 != 0);
+        CHECK (s2 != 0);
+        CHECK (s2 != s1);
+    }
+    // (2) pinned seed: every run reports it verbatim.
+    {
+        RunsProcessor p;
+        configure (p, 1.0f, 777777.0f);
+        Runner r (p, 2048);
+        r.startAt (0.0);
+        const uint32_t s1 = fireRun (p, r);
+        releaseTriggers (r);
+        const uint32_t s2 = fireRun (p, r);
+        CHECK_EQ (s1, 777777u);
+        CHECK_EQ (s2, 777777u);
+    }
+    // (3) humanize off: the overlay reports 0 (no seed used).
+    {
+        RunsProcessor p;
+        configure (p, 0.0f, 0.0f);
+        Runner r (p, 2048);
+        r.startAt (0.0);
+        const uint32_t s = fireRun (p, r);
+        CHECK_EQ (s, 0u);
+    }
+    // (4) fixed seed through the whole pipeline: two fresh processors emit
+    // bit-identical note-ons (pitch, velocity, block, sample) - the jitter
+    // is part of the deterministic plan per seed.
+    {
+        auto render = [&] ()
+        {
+            RunsProcessor p;
+            configure (p, 1.0f, 424242.0f);
+            Runner r (p, 2048);
+            r.startAt (0.0);
+            r.run (bufferOf ({
+                { 0, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100) },
+                { 0, juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100) },
+            }), 90);
+            std::vector<std::vector<int>> ons;
+            for (const auto& e : r.out)
+                if (e.msg.isNoteOn())
+                    ons.push_back ({ (int) e.msg.getNoteNumber(),
+                                     (int) e.msg.getVelocity(),
+                                     e.block, e.sample });
+            return ons;
+        };
+        const auto a = render();
+        const auto b = render();
+        CHECK (! a.empty());
+        CHECK (a == b);
+    }
+}
+
 // Offline export (drag-to-DAW): explicit endpoints -> a type-0 MIDI file in
 // the temp folder, plus the refusal cases. No playhead, no chunk, no audio
 // thread: this is the message-thread path the Drag MIDI button drives.
@@ -1483,8 +1646,9 @@ int main()
     testChunkTrailingGarbageIgnored();
     testChunkWrongMagicRejected();
     testChunkVersionRejected();
-    testChunkV1BackwardCompatible();
-    testJsonClipboardRoundTrip();
+testChunkV1BackwardCompatible();
+testChunkV2BackwardCompatible();
+testJsonClipboardRoundTrip();
     testJsonClipboardRejected();
     testJsonClipboardPartialAndClamped();
     testStateSavedFullyRoundTrip();
@@ -1497,8 +1661,9 @@ int main()
     testEngineCcValueRanges();
     testEngineOffHandoffPairFiresAtSecondNoteOn();
     testEngineOffHandoffSwitchOffWithoutSecondNote();
-    testAccentWeightsReachEngine();
-    testOfflineExportMidiFile();
+testAccentWeightsReachEngine();
+testHumanizeSeedResolution();
+testOfflineExportMidiFile();
     std::printf ("%s (%d failures)\n",
                  failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

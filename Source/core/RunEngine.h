@@ -1,10 +1,12 @@
 #pragma once
 
 // RunEngine: run assembly per specification.md S5.3, cut semantics S5.6,
-// emission details S5.8. Plain C++17, NO JUCE, no allocation/locks on call
-// paths (caller-driven: the engine knows nothing about MIDI messages or
-// processBlock; the processor converts beats to samples and orders events
-// per S6.1 in P2). Single namespace runsp. No randomness anywhere.
+// emission details S5.8, humanization S5.9. Plain C++17, NO JUCE, no
+// allocation/locks on call paths (caller-driven: the engine knows nothing
+// about MIDI messages or processBlock; the processor converts beats to
+// samples and orders events per S6.1 in P2). Single namespace runsp.
+// Randomness only via S5.9 humanize, and there it is a seeded splitmix32
+// stream: same RunParams in, same run out.
 
 #include <cstdint>
 
@@ -73,7 +75,22 @@ struct RunParams
     // edit changes both the live run and the offline export the same way.
     double downWeight = kDownbeatWeight;
     double midBarWeight = kMidBarWeight;
+    // S5.9 humanize: off by default (exactly the deterministic assembly of
+    // S5.3). On, each run note gets a seeded velocity deflection of up to
+    // +-humanizeVelAmt (relative) and a seeded onset jitter of up to
+    // +-humanizeTimingBeats (absolute), one splitmix32 stream per run.
+    // The caller resolves humanizeSeed (a nonzero constant reproduces a
+    // run; the processor generates a fresh one per run for seed 0).
+    bool humanize = false;
+    uint32_t humanizeSeed = 1;
+    double humanizeVelAmt = 0.0;      // 0..0.5 relative deflection
+    double humanizeTimingBeats = 0.0; // max |onset offset| in beats
 };
+
+// S5.9: one splitmix32 draw from the caller's state (used both for the
+// per-run humanize stream and by the processor to generate fresh seeds
+// from its session counter). Pure integer math, no locks.
+uint32_t humanizePrngNext (uint32_t& state);
 
 struct PairTrigger
 {
@@ -132,6 +149,9 @@ public:
     int pitchOf (int i) const { return i >= 0 && i < count_ ? pitches_[i] : -1; }
     int velocityOf (int i) const { return i >= 0 && i < count_ ? vels_[i] : -1; }
     double startBeat() const { return startBeat_; }
+    // S5.9: seed used by the last started run (0 when humanize was off);
+    // the debug overlay shows it so a seed-0 run can be pinned and redone.
+    uint32_t seedOfLastRun() const { return seedUsed_; }
 
 private:
     static constexpr int kMaxNotes = 4096; // S5.3 n clamp
@@ -150,6 +170,7 @@ private:
     uint8_t pitches_[kMaxNotes];
     uint8_t vels_[kMaxNotes];
     bool offSent_[kMaxNotes];
+    uint32_t seedUsed_ = 0; // S5.9 seed of the last started run (0 = off)
 
     // Absolute off beat of interior note i: classic gate = onset + gate
     // fraction of the own gap; overlap: next onset + clamped fraction of the
