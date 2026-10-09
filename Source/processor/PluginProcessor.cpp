@@ -1060,16 +1060,22 @@ void RunsProcessor::processBlock (juce::AudioBuffer<float>& audio,
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // One silent audio passthrough bus (specification.md S2).
-    if (audio.getNumChannels() > 0 && audio.getNumSamples() > 0)
-    {
-        for (int c = 0; c < audio.getNumChannels(); ++c)
-            audio.copyFrom (c, 0, audio, c, 0, audio.getNumSamples());
-    }
-    else
-    {
-        audio.clear();
-    }
+    // One audio bus: audio passes through untouched while the host feeds us
+    // any, silent otherwise (specification.md S2 - MIDI-only plug-in).
+    // Output channels with NO input channel behind them are not guaranteed to
+    // be empty (JUCE: "the last two channels may contain garbage"), and an
+    // instrument slot - Cubase - deactivates our input bus, so the VST3
+    // wrapper hands processBlock output channels backed by raw, never-written
+    // scratch memory. The old code copied every channel onto itself (a no-op)
+    // and forwarded that garbage verbatim: constant loud noise on the Cubase
+    // instrument track. Clear every output channel that carries no input -
+    // JUCE's own template idiom for exactly this "screaming feedback" case.
+    const int numIn = juce::jlimit (0, audio.getNumChannels(),
+                                    juce::jmax (0, getTotalNumInputChannels()));
+    const int numOut = juce::jlimit (numIn, audio.getNumChannels(),
+                                     juce::jmax (0, getTotalNumOutputChannels()));
+    for (int c = numIn; c < numOut; ++c)
+        audio.clear (c, 0, audio.getNumSamples());
 
     const int numSamples = audio.getNumSamples();
 

@@ -1624,6 +1624,62 @@ void testOfflineExportMidiFile()
     CHECK (same.getFullPathName().isEmpty());
     CHECK_EQ (errSame, juce::String ("Start = target"));
 }
+
+// Audio bus (S2): an instrument slot deactivates the plug-in's input bus, and
+// the VST3 wrapper then hands processBlock output channels that were never
+// written (raw scratch memory). The old per-channel self-copy was a no-op and
+// forwarded that garbage verbatim - the reported "constant loud noise" on the
+// Cubase instrument track. With no input there is nothing to pass through, so
+// every output channel must come out silent.
+void testAudioBusSilentWhenInputBusDisabled()
+{
+    RunsProcessor p;
+    juce::AudioProcessor::BusesLayout layout;
+    layout.inputBuses.add (juce::AudioChannelSet::disabled());
+    layout.outputBuses.add (juce::AudioChannelSet::stereo());
+    CHECK (p.setBusesLayout (layout));
+    CHECK_EQ (p.getTotalNumInputChannels(), 0);
+
+    juce::AudioBuffer<float> audio (2, 128);
+    for (int c = 0; c < audio.getNumChannels(); ++c)
+        for (int s = 0; s < audio.getNumSamples(); ++s)
+            audio.setSample (c, s, 1000.0f + (float) (c * 128 + s));
+
+    juce::MidiBuffer midi;
+    p.processBlock (audio, midi);
+
+    bool silent = true;
+    for (int c = 0; c < audio.getNumChannels(); ++c)
+        for (int s = 0; s < audio.getNumSamples(); ++s)
+            if (audio.getSample (c, s) != 0.0f)
+                silent = false;
+    CHECK (silent);
+}
+
+// S2 stays honest the other way: while the host feeds us audio (effect
+// insert), the bus still passes it through untouched.
+void testAudioPassesThroughWhenInputBusEnabled()
+{
+    RunsProcessor p;
+    CHECK_EQ (p.getTotalNumInputChannels(), 2);
+
+    juce::AudioBuffer<float> audio (2, 64), expected (2, 64);
+    for (int c = 0; c < audio.getNumChannels(); ++c)
+        for (int s = 0; s < audio.getNumSamples(); ++s)
+            audio.setSample (c, s, 0.25f * (float) ((c * 64 + s) % 17)
+                                       - 2.0f);
+    expected.makeCopyOf (audio);
+
+    juce::MidiBuffer midi;
+    p.processBlock (audio, midi);
+
+    bool unchanged = true;
+    for (int c = 0; c < audio.getNumChannels(); ++c)
+        for (int s = 0; s < audio.getNumSamples(); ++s)
+            if (audio.getSample (c, s) != expected.getSample (c, s))
+                unchanged = false;
+    CHECK (unchanged);
+}
 } // namespace
 
 int main()
@@ -1669,6 +1725,8 @@ testJsonClipboardRoundTrip();
 testAccentWeightsReachEngine();
 testHumanizeSeedResolution();
 testOfflineExportMidiFile();
+    testAudioBusSilentWhenInputBusDisabled();
+    testAudioPassesThroughWhenInputBusEnabled();
     std::printf ("%s (%d failures)\n",
                  failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
